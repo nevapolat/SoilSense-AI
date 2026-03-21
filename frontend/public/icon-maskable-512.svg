@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="SoilSense AI">
+  <rect width="512" height="512" rx="160" fill="#F5F5DC"/>
+  <circle cx="256" cy="256" r="168" fill="#228B22" opacity="0.18"/>
+  <path d="M142 378c60-108 156-160 260-188-24 108-82 178-170 212-32 12-66 2-90-24Z" fill="#228B22"/>
+  <path d="M220 414c40-72 84-124 140-156-14 58-40 104-84 140-22 18-42 20-56 16Z" fill="#8B5A2B" opacity="0.95"/>
+  <circle cx="256" cy="212" r="28" fill="#228B22"/>
+</svg>
+
