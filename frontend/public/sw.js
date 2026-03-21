@@ -1,12 +1,14 @@
 // Disable SW runtime caching to avoid stale UI bundles.
 // On activate: clear existing SoilSense caches and unregister.
 self.addEventListener('install', (event) => {
+  console.log('[SoilSense SW] install: skipWaiting')
   event.waitUntil(self.skipWaiting())
 })
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
+      console.log('[SoilSense SW] activate: clearing soilsense-pwa caches + unregister')
       const keys = await caches.keys()
       await Promise.all(
         keys

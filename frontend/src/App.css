@@ -943,6 +943,14 @@
   width: 100%;
 }
 
+.runtime-key-banner-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 /* Soil Vitality Score */
 .score-card {
   border-color: rgba(27, 67, 50, 0.35);

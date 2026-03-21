@@ -9,6 +9,9 @@ import {
   Trash2,
 } from 'lucide-react'
 import { generateCompostRecipe } from '../lib/gemini'
+import { createLogger, generateRunId } from '../lib/logger'
+
+const uiLog = createLogger('ui')
 
 const wasteOptions = [
   {
@@ -100,12 +103,26 @@ export default function CompostWizard({ onRecipeGenerated, lang } = {}) {
       if (!selectedItems.length) {
         throw new Error(t('compostWizard.addAtLeastOneWasteItem'))
       }
-      const json = await generateCompostRecipe(selectedItems, { lang })
+      const correlationId = generateRunId()
+      const json = await generateCompostRecipe(selectedItems, { lang, correlationId })
       setRecipe(json)
       setStatus('success')
 
-      if (typeof onRecipeGenerated === 'function' && !json?.parseError) {
-        onRecipeGenerated()
+      if (!json?.parseError) {
+        let greenScoreAwarded = false
+        if (typeof onRecipeGenerated === 'function') {
+          onRecipeGenerated()
+          greenScoreAwarded = true
+        }
+        uiLog.info(
+          'ui.compost.recipeGenerated',
+          {
+            greenScoreAwarded,
+            difficultyLevel: json?.difficultyLevel,
+            greenPercent: json?.greenBrownBalance?.greenPercent,
+          },
+          { correlationId }
+        )
       }
     } catch (err) {
       setError(err?.message ? err.message : String(err))

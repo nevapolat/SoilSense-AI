@@ -8,13 +8,23 @@ import {
   generateSoilVitalityScore,
   buildSoilVitalityScoreFallback,
   generateDailyTasks,
+  clearRuntimeGeminiApiKey,
+  getRuntimeGeminiApiKey,
   setRuntimeGeminiApiKey,
   testGeminiApiKey,
 } from './lib/gemini'
 import CompostWizard from './components/CompostWizard'
 import SoilVitalityScore from './components/SoilVitalityScore'
 import PlantScanner from './components/PlantScanner'
+import DiagnosticsPanel from './components/DiagnosticsPanel'
 import { useI18n } from './i18n/useI18n'
+import { bucketAccuracyMeters, createLogger, generateRunId, normalizeErrorForLog } from './lib/logger'
+
+const storageLog = createLogger('storage')
+const geoLog = createLogger('geo')
+const uiLog = createLogger('ui')
+const appLog = createLogger('app')
+const weatherLog = createLogger('weather')
 
 function coordsKey(c) {
   // Small rounding so repeated measurements don't re-trigger AI calls constantly.
@@ -39,11 +49,19 @@ const ACTIVITY_TYPES = [
 function loadProfile() {
   try {
     const raw = localStorage.getItem(PROFILE_STORAGE_KEY)
-    if (!raw) return null
+    if (!raw) {
+      storageLog.debug('storage.read', { key: PROFILE_STORAGE_KEY, hit: false })
+      return null
+    }
     const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return null
+    if (!parsed || typeof parsed !== 'object') {
+      storageLog.warn('storage.read.invalid', { key: PROFILE_STORAGE_KEY, bytes: raw.length })
+      return null
+    }
+    storageLog.info('storage.read', { key: PROFILE_STORAGE_KEY, hit: true, bytes: raw.length })
     return parsed
-  } catch {
+  } catch (err) {
+    storageLog.warn('storage.read.failed', { key: PROFILE_STORAGE_KEY, ...normalizeErrorForLog(err) })
     return null
   }
 }
@@ -51,10 +69,16 @@ function loadProfile() {
 function loadActivityLog() {
   try {
     const raw = localStorage.getItem(ACTIVITY_LOG_STORAGE_KEY)
-    if (!raw) return []
+    if (!raw) {
+      storageLog.debug('storage.read', { key: ACTIVITY_LOG_STORAGE_KEY, hit: false })
+      return []
+    }
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
+    const list = Array.isArray(parsed) ? parsed : []
+    storageLog.info('storage.read', { key: ACTIVITY_LOG_STORAGE_KEY, hit: true, bytes: raw.length, count: list.length })
+    return list
+  } catch (err) {
+    storageLog.warn('storage.read.failed', { key: ACTIVITY_LOG_STORAGE_KEY, ...normalizeErrorForLog(err) })
     return []
   }
 }
@@ -337,15 +361,35 @@ function buildDailyTasksFallback(signals, t) {
   ]
 }
 
-async function fetchOpenMeteoSignals(latitude, longitude) {
+async function fetchOpenMeteoSignals(latitude, longitude, { correlationId } = {}) {
+  const t0 = performance.now()
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(
     latitude
   )}&longitude=${encodeURIComponent(
     longitude
   )}&current=temperature_2m,relative_humidity_2m,dew_point_2m,precipitation,wind_speed_10m,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&hourly=temperature_2m,dew_point_2m&forecast_hours=48&timezone=auto`
 
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`Weather request failed: HTTP ${res.status}`)
+  weatherLog.info('weather.openMeteo.request.start', { correlationId })
+  let res
+  try {
+    res = await fetch(url)
+  } catch (err) {
+    weatherLog.error(
+      'weather.openMeteo.request.error',
+      { ...normalizeErrorForLog(err), phase: 'fetch' },
+      { correlationId, durationMs: performance.now() - t0 }
+    )
+    throw err
+  }
+
+  if (!res.ok) {
+    weatherLog.warn(
+      'weather.openMeteo.request.error',
+      { httpStatus: res.status, phase: 'http' },
+      { correlationId, durationMs: performance.now() - t0 }
+    )
+    throw new Error(`Weather request failed: HTTP ${res.status}`)
+  }
 
   const data = await res.json()
 
@@ -410,6 +454,38 @@ async function fetchOpenMeteoSignals(latitude, longitude) {
     break
   }
 
+  const humidityBucket =
+    typeof humidityNowPct === 'number'
+      ? humidityNowPct < 40
+        ? 'low'
+        : humidityNowPct < 70
+          ? 'mid'
+          : 'high'
+      : 'unknown'
+  const sunBucket =
+    typeof tempNowC === 'number'
+      ? tempNowC < 15
+        ? 'cool'
+        : tempNowC <= 28
+          ? 'warm'
+          : 'hot'
+      : 'unknown'
+
+  weatherLog.info(
+    'weather.openMeteo.request.complete',
+    {
+      httpStatus: res.status,
+      hoursFetched: forecastLen,
+      minTempWindowC: next48hMinTempC,
+      frostRisk48h:
+        (typeof firstBelow2CInHours === 'number' ? firstBelow2CInHours <= 48 : false) ||
+        (typeof next48hMinTempC === 'number' ? next48hMinTempC < frostThresholdC : false),
+      humidityBucket,
+      sunBucket,
+    },
+    { correlationId, durationMs: performance.now() - t0 }
+  )
+
   return {
     tempNowC,
     humidityNowPct,
@@ -423,6 +499,8 @@ async function fetchOpenMeteoSignals(latitude, longitude) {
     frostThresholdC,
     next48hMinTempC,
     firstBelow2CInHours,
+    humidityBucket,
+    sunBucket,
     next48hHourly: {
       time: next48hTime,
       temperature2mC: next48hTempC,
@@ -529,9 +607,11 @@ export default function SoilSenseApp() {
     setGreenScore((prev) => {
       const next = prev + delta
       try {
-        localStorage.setItem(GREEN_SCORE_KEY, String(next))
-      } catch {
-        // ignore
+        const payload = String(next)
+        localStorage.setItem(GREEN_SCORE_KEY, payload)
+        storageLog.info('storage.write', { key: GREEN_SCORE_KEY, bytes: payload.length })
+      } catch (err) {
+        storageLog.warn('storage.write.failed', { key: GREEN_SCORE_KEY, ...normalizeErrorForLog(err) })
       }
       return next
     })
@@ -559,6 +639,22 @@ export default function SoilSenseApp() {
   )
   const [activityLog, setActivityLog] = useState(() => loadActivityLog())
   const [activityPickerOpen, setActivityPickerOpen] = useState(false)
+
+  const refreshCycleKeyRef = useRef('')
+  const runIdRef = useRef(null)
+
+  function ensureRunId() {
+    const coordPart =
+      coords && typeof coords.latitude === 'number' && typeof coords.longitude === 'number'
+        ? coordsKey(coords)
+        : 'no-coords'
+    const key = `${coordPart}|${lang}`
+    if (refreshCycleKeyRef.current !== key) {
+      refreshCycleKeyRef.current = key
+      runIdRef.current = generateRunId()
+    }
+    return runIdRef.current
+  }
 
   function loadDailyTasksForDay(dayKey) {
     try {
@@ -597,12 +693,17 @@ export default function SoilSenseApp() {
       const isDone = prev.includes(id)
       const next = isDone ? prev : [...prev, id]
       try {
-        localStorage.setItem(
-          `soilsense.dailyTasksCompleted.${dailyTasksDayKey}`,
-          JSON.stringify(next)
-        )
-      } catch {
-        // ignore
+        const payload = JSON.stringify(next)
+        localStorage.setItem(`soilsense.dailyTasksCompleted.${dailyTasksDayKey}`, payload)
+        storageLog.info('storage.write', {
+          key: `soilsense.dailyTasksCompleted.${dailyTasksDayKey}`,
+          bytes: payload.length,
+        })
+      } catch (err) {
+        storageLog.warn('storage.write.failed', {
+          key: `soilsense.dailyTasksCompleted.${dailyTasksDayKey}`,
+          ...normalizeErrorForLog(err),
+        })
       }
 
       // Only award points the first time.
@@ -637,6 +738,7 @@ export default function SoilSenseApp() {
   }
 
   function saveProfileDraft() {
+    uiLog.info('ui.modal.profile', { action: 'close', reason: 'save' })
     const next = {
       soilType: soilTypeDraft,
       latitude:
@@ -646,9 +748,11 @@ export default function SoilSenseApp() {
       updatedAt: new Date().toISOString(),
     }
     try {
-      localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(next))
-    } catch {
-      // ignore
+      const payload = JSON.stringify(next)
+      localStorage.setItem(PROFILE_STORAGE_KEY, payload)
+      storageLog.info('storage.write', { key: PROFILE_STORAGE_KEY, bytes: payload.length })
+    } catch (err) {
+      storageLog.warn('storage.write.failed', { key: PROFILE_STORAGE_KEY, ...normalizeErrorForLog(err) })
     }
     setProfile(next)
 
@@ -674,9 +778,15 @@ export default function SoilSenseApp() {
     setActivityLog((prev) => {
       const next = [entry, ...prev].slice(0, 200)
       try {
-        localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, JSON.stringify(next))
-      } catch {
-        // ignore
+        const payload = JSON.stringify(next)
+        localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, payload)
+        storageLog.info('storage.write', {
+          key: ACTIVITY_LOG_STORAGE_KEY,
+          bytes: payload.length,
+          count: next.length,
+        })
+      } catch (err) {
+        storageLog.warn('storage.write.failed', { key: ACTIVITY_LOG_STORAGE_KEY, ...normalizeErrorForLog(err) })
       }
       return next
     })
@@ -691,6 +801,7 @@ export default function SoilSenseApp() {
   const [keyDraft, setKeyDraft] = useState('')
   const [keyStatus, setKeyStatus] = useState('idle') // idle|testing|saved|error
   const [keyStatusError, setKeyStatusError] = useState('')
+  const [usesRuntimeKey, setUsesRuntimeKey] = useState(() => Boolean(getRuntimeGeminiApiKey()))
 
   const isGeminiKeyBlocked = useMemo(() => {
     const combined = `${aiError || ''}\n${smartError || ''}`.toLowerCase()
@@ -730,11 +841,13 @@ export default function SoilSenseApp() {
     if (!('geolocation' in navigator)) {
       setGeoStatus('error')
       setGeoError(t('common.geolocation.notSupported'))
+      geoLog.warn('geo.prompt.unsupported', {})
       return
     }
     if (locationRequestInFlightRef.current) return
     locationRequestInFlightRef.current = true
 
+    geoLog.info('geo.prompt.start', {})
     setGeoStatus('loading')
     setGeoError('')
     setCoords(null)
@@ -750,28 +863,37 @@ export default function SoilSenseApp() {
           longitude: pos.coords.longitude,
           accuracy: pos.coords.accuracy,
         }
+        geoLog.info(
+          'geo.location.success',
+          {
+            accuracyBucket: bucketAccuracyMeters(pos.coords.accuracy),
+            ...(import.meta.env.VITE_LOG_PRECISE_LOCATION === 'true'
+              ? {
+                  latRounded: Number(pos.coords.latitude).toFixed(2),
+                  lonRounded: Number(pos.coords.longitude).toFixed(2),
+                }
+              : {}),
+          },
+          {}
+        )
         setCoords(nextCoords)
         setGeoStatus('success')
-        try {
-          const prevProfile = loadProfile() || {}
-          localStorage.setItem(
-            PROFILE_STORAGE_KEY,
-            JSON.stringify({
-              ...prevProfile,
-              latitude: nextCoords.latitude,
-              longitude: nextCoords.longitude,
-              updatedAt: new Date().toISOString(),
-            })
-          )
-          setProfile((prev) => ({
+        setProfile((prev) => {
+          const next = {
             ...(prev || {}),
             latitude: nextCoords.latitude,
             longitude: nextCoords.longitude,
             updatedAt: new Date().toISOString(),
-          }))
-        } catch {
-          // ignore
-        }
+          }
+          try {
+            const payload = JSON.stringify(next)
+            localStorage.setItem(PROFILE_STORAGE_KEY, payload)
+            storageLog.info('storage.write', { key: PROFILE_STORAGE_KEY, bytes: payload.length })
+          } catch (err) {
+            storageLog.warn('storage.write.failed', { key: PROFILE_STORAGE_KEY, ...normalizeErrorForLog(err) })
+          }
+          return next
+        })
         locationRequestInFlightRef.current = false
       },
       (err) => {
@@ -785,6 +907,9 @@ export default function SoilSenseApp() {
                 : err?.message
                   ? err.message
                   : t('common.geolocation.unknown')
+        const reason =
+          err?.code === 1 ? 'denied' : err?.code === 2 ? 'unavailable' : err?.code === 3 ? 'timeout' : 'unknown'
+        geoLog.warn('geo.location.error', { code: err?.code, reason, message: String(message).slice(0, 200) }, {})
         setGeoStatus('error')
         setGeoError(message)
         locationRequestInFlightRef.current = false
@@ -809,8 +934,9 @@ export default function SoilSenseApp() {
     setKeyStatusError('')
 
     try {
-      await testGeminiApiKey(cleaned)
+      await testGeminiApiKey(cleaned, { correlationId: generateRunId() })
       setRuntimeGeminiApiKey(cleaned)
+      setUsesRuntimeKey(true)
       setKeyStatus('saved')
       setKeyPromptOpen(false)
 
@@ -818,8 +944,10 @@ export default function SoilSenseApp() {
       lastAdviceCoordsKeyRef.current = ''
       lastAlertCoordsKeyRef.current = ''
       if (coords && geoStatus === 'success') {
-        runAdvice()
-        runSmartAlert()
+        void (async () => {
+          await runAdvice()
+          await runSmartAlert()
+        })()
       }
 
       setTimeout(() => setKeyStatus('idle'), 2000)
@@ -835,6 +963,7 @@ export default function SoilSenseApp() {
 
     const saved = loadProfile()
     if (saved && typeof saved.latitude === 'number' && typeof saved.longitude === 'number') {
+      geoLog.info('geo.profile.cacheHit', { skippedPrompt: true }, {})
       setCoords({
         latitude: saved.latitude,
         longitude: saved.longitude,
@@ -850,6 +979,7 @@ export default function SoilSenseApp() {
 
   async function runAdvice() {
     if (!coords) return
+    const correlationId = ensureRunId()
     setAiStatus('loading')
     setAiAdvice('')
     setAiError('')
@@ -858,7 +988,8 @@ export default function SoilSenseApp() {
       const text = await generateRegenerativeAdvice({
         latitude: coords.latitude,
         longitude: coords.longitude,
-      lang,
+        lang,
+        correlationId,
       })
       setAiAdvice(text)
       setAiStatus('success')
@@ -870,6 +1001,7 @@ export default function SoilSenseApp() {
 
   async function runSmartAlert() {
     if (!coords) return
+    const correlationId = ensureRunId()
     setSmartStatus('loading')
     setSmartError('')
     setSmartAlert(null)
@@ -879,7 +1011,7 @@ export default function SoilSenseApp() {
     setVitalityExplanation('')
 
     try {
-      const signals = await fetchOpenMeteoSignals(coords.latitude, coords.longitude)
+      const signals = await fetchOpenMeteoSignals(coords.latitude, coords.longitude, { correlationId })
       const fallback = buildSmartAlertFallback(
         {
           ...signals,
@@ -887,16 +1019,15 @@ export default function SoilSenseApp() {
         t
       )
 
-      const [alertJson, vitalityJson] = await Promise.all([
-        generateSmartAlert({
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-          weatherSummary: signals,
-          next48hHourly: signals?.next48hHourly,
-          lang,
-        }),
-        generateSoilVitalityScore({ weatherSummary: signals, lang }),
-      ])
+      const alertJson = await generateSmartAlert({
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        weatherSummary: signals,
+        next48hHourly: signals?.next48hHourly,
+        lang,
+        correlationId,
+      })
+      const vitalityJson = await generateSoilVitalityScore({ weatherSummary: signals, lang, correlationId })
 
       // If Gemini fails to parse, or returns parseError, fall back to deterministic advice.
       if (alertJson?.parseError) {
@@ -905,6 +1036,28 @@ export default function SoilSenseApp() {
         setSmartAlert(alertJson)
       }
       setSmartStatus('success')
+
+      const effectiveAlert = alertJson?.parseError ? fallback : alertJson
+      const frostDetected =
+        Boolean(effectiveAlert?.riskType === 'frost' || effectiveAlert?.isCritical) ||
+        Boolean(
+          typeof signals?.firstBelow2CInHours === 'number' ? signals.firstBelow2CInHours <= 48 : false
+        ) ||
+        Boolean(
+          typeof signals?.next48hMinTempC === 'number' && typeof signals?.frostThresholdC === 'number'
+            ? signals.next48hMinTempC < signals.frostThresholdC
+            : false
+        )
+      uiLog.info(
+        'ui.smartAlert.result',
+        {
+          priority: effectiveAlert?.isCritical ? 'critical' : 'normal',
+          riskType: effectiveAlert?.riskType || 'unknown',
+          frostDetected,
+          usedAi: !alertJson?.parseError,
+        },
+        { correlationId }
+      )
 
       if (vitalityJson?.parseError) {
         const scoreFallback = buildSoilVitalityScoreFallback(signals, lang)
@@ -923,6 +1076,17 @@ export default function SoilSenseApp() {
         }
       }
       setVitalityStatus('success')
+
+      uiLog.info(
+        'ui.soilVitality.scoreSummary',
+        {
+          weatherHumidityBucket: signals?.humidityBucket || 'unknown',
+          sunBucket: signals?.sunBucket || 'unknown',
+          activityImpactPoints,
+          usedGeminiFallback: Boolean(vitalityJson?.parseError),
+        },
+        { correlationId }
+      )
 
       // Daily Tasks: generate once per day from current weather + vitality.
       if (
@@ -944,6 +1108,7 @@ export default function SoilSenseApp() {
             weatherSummary: signals,
             soilHealthScore: soilScoreForTasks,
             lang,
+            correlationId,
           })
 
           const tasksCandidate = dailyJson?.tasks
@@ -951,29 +1116,45 @@ export default function SoilSenseApp() {
             Array.isArray(tasksCandidate) && tasksCandidate.length === 3
               ? tasksCandidate
               : buildDailyTasksFallback(signals, t)
+          const taskSource =
+            Array.isArray(tasksCandidate) && tasksCandidate.length === 3 ? 'ai' : 'fallback'
 
           setDailyTasks(tasks)
           setDailyTasksStatus('success')
+          uiLog.info(
+            'ui.dailyTasks.persisted',
+            { dayKey: dailyTasksDayKey, generatedCount: tasks.length, source: taskSource },
+            { correlationId }
+          )
           try {
-            localStorage.setItem(
-              `soilsense.dailyTasks.${dailyTasksDayKey}`,
-              JSON.stringify(tasks)
-            )
-          } catch {
-            // ignore
+            const payload = JSON.stringify(tasks)
+            localStorage.setItem(`soilsense.dailyTasks.${dailyTasksDayKey}`, payload)
+            storageLog.info('storage.write', { key: `soilsense.dailyTasks.${dailyTasksDayKey}`, bytes: payload.length })
+          } catch (err) {
+            storageLog.warn('storage.write.failed', {
+              key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+              ...normalizeErrorForLog(err),
+            })
           }
         } catch {
           const tasks = buildDailyTasksFallback(signals, t)
           setDailyTasks(tasks)
           setDailyTasksStatus('success')
           setDailyTasksError('')
+          uiLog.info(
+            'ui.dailyTasks.persisted',
+            { dayKey: dailyTasksDayKey, generatedCount: tasks.length, source: 'fallback' },
+            { correlationId }
+          )
           try {
-            localStorage.setItem(
-              `soilsense.dailyTasks.${dailyTasksDayKey}`,
-              JSON.stringify(tasks)
-            )
-          } catch {
-            // ignore
+            const payload = JSON.stringify(tasks)
+            localStorage.setItem(`soilsense.dailyTasks.${dailyTasksDayKey}`, payload)
+            storageLog.info('storage.write', { key: `soilsense.dailyTasks.${dailyTasksDayKey}`, bytes: payload.length })
+          } catch (err) {
+            storageLog.warn('storage.write.failed', {
+              key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+              ...normalizeErrorForLog(err),
+            })
           }
         } finally {
           dailyTasksGenerationInFlightRef.current = false
@@ -1001,39 +1182,54 @@ export default function SoilSenseApp() {
         setDailyTasks(tasks)
         setDailyTasksStatus('success')
         setDailyTasksError('')
+        uiLog.info(
+          'ui.dailyTasks.persisted',
+          { dayKey: dailyTasksDayKey, generatedCount: tasks.length, source: 'errorFallback' },
+          { correlationId }
+        )
         try {
-          localStorage.setItem(
-            `soilsense.dailyTasks.${dailyTasksDayKey}`,
-            JSON.stringify(tasks)
-          )
-        } catch {
-          // ignore
+          const payload = JSON.stringify(tasks)
+          localStorage.setItem(`soilsense.dailyTasks.${dailyTasksDayKey}`, payload)
+          storageLog.info('storage.write', { key: `soilsense.dailyTasks.${dailyTasksDayKey}`, bytes: payload.length })
+        } catch (e) {
+          storageLog.warn('storage.write.failed', {
+            key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+            ...normalizeErrorForLog(e),
+          })
         }
       }
     }
   }
 
-  // Fetch soil advice when coords successfully update (and change).
+  function onUseEnvGeminiKey() {
+    clearRuntimeGeminiApiKey()
+    setUsesRuntimeKey(false)
+    setKeyDraft('')
+    setKeyStatus('idle')
+    setKeyStatusError('')
+    lastAdviceCoordsKeyRef.current = ''
+    lastAlertCoordsKeyRef.current = ''
+    if (coords && geoStatus === 'success') {
+      void (async () => {
+        await runAdvice()
+        await runSmartAlert()
+      })()
+    }
+  }
+
+  // Fetch soil advice + smart alert when coords successfully update (sequential to reduce Gemini burst / rate limits).
   useEffect(() => {
     if (geoStatus !== 'success') return
     if (!coords) return
 
     const key = coordsKey(coords)
-    if (key === lastAdviceCoordsKeyRef.current) return
+    if (key === lastAdviceCoordsKeyRef.current && key === lastAlertCoordsKeyRef.current) return
     lastAdviceCoordsKeyRef.current = key
-    runAdvice()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coords, geoStatus])
-
-  // Fetch smart alert when coords successfully update (and change).
-  useEffect(() => {
-    if (geoStatus !== 'success') return
-    if (!coords) return
-
-    const key = coordsKey(coords)
-    if (key === lastAlertCoordsKeyRef.current) return
     lastAlertCoordsKeyRef.current = key
-    runSmartAlert()
+    void (async () => {
+      await runAdvice()
+      await runSmartAlert()
+    })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coords, geoStatus])
 
@@ -1042,10 +1238,14 @@ export default function SoilSenseApp() {
     if (activeTab !== 'dashboard') return
     if (geoStatus !== 'success') return
     if (!coords) return
+    const correlationId = ensureRunId()
+    appLog.info('app.ai.rerun', { reason: 'languageChange' }, { correlationId })
     lastAlertCoordsKeyRef.current = ''
     forceDailyTasksRefreshRef.current = true
-    runSmartAlert()
-    runAdvice()
+    void (async () => {
+      await runAdvice()
+      await runSmartAlert()
+    })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lang])
 
@@ -1060,10 +1260,20 @@ export default function SoilSenseApp() {
     setKnowledgeHub(null)
 
     ;(async () => {
+      const correlationId = generateRunId()
       try {
-        const hub = await generateKnowledgeHub({ lang })
+        const hub = await generateKnowledgeHub({ lang, correlationId })
         setKnowledgeHub(hub)
         setHubStatus('success')
+        const categories = Array.isArray(hub?.categories) ? hub.categories : []
+        uiLog.info(
+          'ui.knowledgeHub.categoriesLoaded',
+          {
+            categoryCount: categories.length,
+            names: categories.map((c) => c?.name).filter(Boolean),
+          },
+          { correlationId }
+        )
       } catch (err) {
         setHubStatus('error')
         setHubError(err?.message ? err.message : String(err))
@@ -1082,10 +1292,20 @@ export default function SoilSenseApp() {
     setKnowledgeHub(null)
 
     ;(async () => {
+      const correlationId = generateRunId()
       try {
-        const hub = await generateKnowledgeHub({ lang })
+        const hub = await generateKnowledgeHub({ lang, correlationId })
         setKnowledgeHub(hub)
         setHubStatus('success')
+        const categories = Array.isArray(hub?.categories) ? hub.categories : []
+        uiLog.info(
+          'ui.knowledgeHub.categoriesLoaded',
+          {
+            categoryCount: categories.length,
+            names: categories.map((c) => c?.name).filter(Boolean),
+          },
+          { correlationId }
+        )
       } catch (err) {
         setHubStatus('error')
         setHubError(err?.message ? err.message : String(err))
@@ -1168,6 +1388,7 @@ export default function SoilSenseApp() {
                   className="btn btn-ghost btn-inline"
                   style={{ marginTop: 10 }}
                   onClick={() => {
+                    uiLog.info('ui.modal.profile', { action: 'open' })
                     setSoilTypeDraft(profile?.soilType || 'loam')
                     setProfileOpen(true)
                   }}
@@ -1175,6 +1396,19 @@ export default function SoilSenseApp() {
                   {t('profile.manageProfile')}
                 </button>
               </header>
+
+              {usesRuntimeKey ? (
+                <section className="card runtime-key-banner" aria-label={t('keyPanel.usingStoredKey')}>
+                  <div className="card-body runtime-key-banner-inner">
+                    <p className="muted" style={{ margin: 0 }}>
+                      {t('keyPanel.usingStoredKey')}
+                    </p>
+                    <button type="button" className="btn btn-ghost btn-inline" onClick={onUseEnvGeminiKey}>
+                      {t('keyPanel.useEnvKey')}
+                    </button>
+                  </div>
+                </section>
+              ) : null}
 
               <section className="command-center">
                 <SoilVitalityScore
@@ -1331,7 +1565,13 @@ export default function SoilSenseApp() {
                   <button
                     type="button"
                     className="btn btn-primary btn-inline"
-                    onClick={() => setActivityPickerOpen((v) => !v)}
+                    onClick={() =>
+                      setActivityPickerOpen((v) => {
+                        const next = !v
+                        uiLog.info('ui.modal.activityPicker', { action: next ? 'open' : 'close' })
+                        return next
+                      })
+                    }
                   >
                     {t('activity.addActivityButton')}
                   </button>
@@ -1450,6 +1690,11 @@ export default function SoilSenseApp() {
                             ? t('keyPanel.saved')
                             : t('keyPanel.saveAndRetry')}
                       </button>
+                      {usesRuntimeKey ? (
+                        <button type="button" className="btn btn-ghost" onClick={onUseEnvGeminiKey}>
+                          {t('keyPanel.useEnvKey')}
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="btn btn-ghost"
@@ -1589,7 +1834,10 @@ export default function SoilSenseApp() {
                   <button
                     type="button"
                     className="btn btn-ghost"
-                    onClick={() => setProfileOpen(false)}
+                    onClick={() => {
+                      uiLog.info('ui.modal.profile', { action: 'close', reason: 'cancel' })
+                      setProfileOpen(false)
+                    }}
                   >
                     {t('profile.cancel')}
                   </button>
@@ -1608,7 +1856,12 @@ export default function SoilSenseApp() {
             <button
               key={t.id}
               className={isActive ? 'nav-item nav-item-active' : 'nav-item'}
-              onClick={() => setActiveTab(t.id)}
+              onClick={() =>
+                setActiveTab((prev) => {
+                  if (prev !== t.id) uiLog.info('ui.tab.change', { from: prev, to: t.id })
+                  return t.id
+                })
+              }
               aria-current={isActive ? 'page' : undefined}
             >
               <Icon size={22} strokeWidth={1.6} className="nav-icon" />
@@ -1617,6 +1870,8 @@ export default function SoilSenseApp() {
           )
         })}
       </nav>
+
+      <DiagnosticsPanel />
     </div>
   )
 }

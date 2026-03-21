@@ -5,6 +5,23 @@ import translations, {
 import { getAllLangs } from './translations'
 import { getLanguageNativeLabel } from './languages'
 import { I18nContext } from './I18nContext'
+import { createLogger } from '../lib/logger'
+
+const i18nLog = createLogger('i18n')
+
+/** Dedupe missing-key warns in dev (same session) to avoid spam when lists re-render. */
+const missingKeyWarnSeen = new Set()
+
+function logMissingTranslation(meta) {
+  if (import.meta.env.PROD) {
+    i18nLog.debug('i18n.missingKey', meta)
+    return
+  }
+  const dedupeKey = `${meta.lang}|${meta.key}|${meta.fallback}`
+  if (missingKeyWarnSeen.has(dedupeKey)) return
+  missingKeyWarnSeen.add(dedupeKey)
+  i18nLog.warn('i18n.missingKey', meta)
+}
 
 function getInitialLang() {
   try {
@@ -53,10 +70,26 @@ export default function I18nProvider({ children } = {}) {
   const availableLangs = useMemo(() => getAllLangs(), [])
 
   useEffect(() => {
+    const initial = getInitialLang()
+    let source = 'default'
+    try {
+      const stored = localStorage.getItem('soilsense.lang')
+      if (stored && getAllLangs().includes(stored)) {
+        source = 'storage'
+      } else {
+        source = 'browser'
+      }
+    } catch {
+      source = 'default'
+    }
+    i18nLog.info('i18n.init', { lang: initial, source })
+  }, [])
+
+  useEffect(() => {
     try {
       localStorage.setItem('soilsense.lang', lang)
-    } catch {
-      // ignore
+    } catch (err) {
+      i18nLog.warn('i18n.persistLangFailed', { message: err?.message ? String(err.message) : String(err) })
     }
   }, [lang])
 
@@ -64,7 +97,11 @@ export default function I18nProvider({ children } = {}) {
     (next) => {
       const normalized = String(next || '').trim().toLowerCase()
       if (!availableLangs.includes(normalized)) return
-      setLangState(normalized)
+      setLangState((prev) => {
+        if (prev === normalized) return prev
+        i18nLog.info('i18n.changeLanguage', { from: prev, to: normalized })
+        return normalized
+      })
     },
     [availableLangs]
   )
@@ -78,11 +115,16 @@ export default function I18nProvider({ children } = {}) {
       if (v == null) {
         const enDict = translations.en
         const enV = tByPath(enDict, key)
-        return enV == null ? humanizeKey(key) : enV
+        if (enV == null) {
+          logMissingTranslation({ key, lang, fallback: 'humanize' })
+          return humanizeKey(key)
+        }
+        logMissingTranslation({ key, lang, fallback: 'en' })
+        return enV
       }
       return v
     },
-    [dict]
+    [dict, lang]
   )
 
   const value = useMemo(

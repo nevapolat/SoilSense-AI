@@ -2,6 +2,9 @@ import { useMemo, useState } from 'react'
 import { Camera, Image, UploadCloud, ScanSearch, Leaf, AlertTriangle } from 'lucide-react'
 import { generatePlantScan } from '../lib/gemini'
 import { useI18n } from '../i18n/useI18n'
+import { createLogger, generateRunId } from '../lib/logger'
+
+const uiLog = createLogger('ui')
 
 export default function PlantScanner({ onScanComplete, lang } = {}) {
   const { t } = useI18n()
@@ -34,6 +37,11 @@ export default function PlantScanner({ onScanComplete, lang } = {}) {
     const file = e.target.files && e.target.files[0]
     if (!file) return
 
+    uiLog.info('ui.plantScan.uploadSelected', {
+      mimeType: file.type || 'unknown',
+      fileNameLen: (file.name || '').length,
+      sizeBytes: typeof file.size === 'number' ? file.size : null,
+    })
     setFileName(file.name || '')
     setStatus('idle')
     setError('')
@@ -59,21 +67,38 @@ export default function PlantScanner({ onScanComplete, lang } = {}) {
     setError('')
     setResult(null)
 
+    const correlationId = generateRunId()
     try {
       const json = await generatePlantScan({
         imageBase64,
         mimeType,
         lang,
+        correlationId,
       })
       setResult(json)
       setStatus(json?.parseError ? 'error' : 'success')
+      uiLog.info(
+        'ui.plantScan.analysisResult',
+        {
+          healthStatus: json?.healthStatus,
+          parseError: Boolean(json?.parseError),
+        },
+        { correlationId }
+      )
       if (typeof onScanComplete === 'function') onScanComplete(json)
       if (json?.parseError) {
         setError(t('plantScanner.couldNotParseResult'))
       }
     } catch (err) {
       setStatus('error')
-      setError(err?.message ? err.message : String(err))
+      setResult(null)
+      const message = err?.message ? err.message : String(err)
+      uiLog.warn(
+        'ui.plantScan.analysisFailed',
+        { messagePreview: message.slice(0, 200) },
+        { correlationId }
+      )
+      setError(message)
     }
   }
 
