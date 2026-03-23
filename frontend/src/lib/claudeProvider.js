@@ -98,20 +98,128 @@ async function generateClaudeText(prompt, { apiKeyOverride } = {}) {
 }
 
 // Main AI entry point for SoilSense.
-export async function generateRegenerativeAdvice({ latitude, longitude, lang, correlationId } = {}) {
+export async function generateRegenerativeAdvice({
+  location,
+  weatherSignals,
+  lang,
+  correlationId,
+  profile,
+  activityImpact,
+  soilHealthScore,
+} = {}) {
   const t0 = performance.now()
   const model = getResolvedClaudeModelName()
   claudeLog.info('claude.soilAdvice.start', { model }, { correlationId })
-  const locationLine = formatCoords(latitude, longitude)
+  const locationLine = formatCoords(location?.latitude, location?.longitude)
+
+  const equipment = profile?.equipment && typeof profile.equipment === 'object' ? profile.equipment : {}
+  const equipmentList = [
+    equipment?.shovel ? 'shovel' : null,
+    equipment?.tractor ? 'tractor' : null,
+    equipment?.sprinkler ? 'sprinkler' : null,
+    equipment?.dripIrrigation ? 'drip irrigation' : null,
+  ]
+    .filter(Boolean)
+    .join(', ')
+
+  const fieldSizePart =
+    typeof profile?.fieldSize?.value === 'number'
+      ? `${profile.fieldSize.value} ${profile.fieldSize.unit}`
+      : 'not provided'
+  const soilTypePart = profile?.soilType || 'unknown'
+  const soilTypeLower = String(soilTypePart).toLowerCase()
+  const soilIsSandy = soilTypeLower.includes('sandy') || soilTypeLower.includes('sand')
+  const workforcePart =
+    typeof profile?.workforce === 'number' && Number.isFinite(profile.workforce) ? String(profile.workforce) : 'unknown'
+
+  const climateZoneHint = typeof location?.climateZone === 'string' ? location.climateZone : 'unknown'
+
+  const tempNowC = typeof weatherSignals?.tempNowC === 'number' ? weatherSignals.tempNowC : null
+  const humidityNowPct = typeof weatherSignals?.humidityNowPct === 'number' ? weatherSignals.humidityNowPct : null
+  const dewPointNowC = typeof weatherSignals?.dewPointNowC === 'number' ? weatherSignals.dewPointNowC : null
+  const windKph = typeof weatherSignals?.windKph === 'number' ? weatherSignals.windKph : null
+  const precipNowMm = typeof weatherSignals?.precipNowMm === 'number' ? weatherSignals.precipNowMm : null
+  const precipSumMm = typeof weatherSignals?.precipitationSumMm === 'number' ? weatherSignals.precipitationSumMm : null
+  const next48hMinTempC = typeof weatherSignals?.next48hMinTempC === 'number' ? weatherSignals.next48hMinTempC : null
+  const humidityBucket = typeof weatherSignals?.humidityBucket === 'string' ? weatherSignals.humidityBucket : null
+  const sunBucket = typeof weatherSignals?.sunBucket === 'string' ? weatherSignals.sunBucket : null
+  const frostRisk48h =
+    typeof weatherSignals?.firstBelow2CInHours === 'number'
+      ? weatherSignals.firstBelow2CInHours <= 48
+      : typeof weatherSignals?.next48hMinTempC === 'number' && typeof weatherSignals?.frostThresholdC === 'number'
+        ? weatherSignals.next48hMinTempC < weatherSignals.frostThresholdC
+        : false
+
+  const compostRecentlyAdded = Boolean(activityImpact?.compostRecentlyAdded)
+
+  const organicKg = typeof activityImpact?.organicKg === 'number' ? activityImpact.organicKg : 0
+  const organicCount = typeof activityImpact?.organicCount === 'number' ? activityImpact.organicCount : 0
+  const chemPestLiters =
+    typeof activityImpact?.chemicalPesticideLiters === 'number' ? activityImpact.chemicalPesticideLiters : 0
+  const chemPestCount =
+    typeof activityImpact?.chemicalPesticideCount === 'number' ? activityImpact.chemicalPesticideCount : 0
+  const chemFertKg = typeof activityImpact?.chemicalFertilizerKg === 'number' ? activityImpact.chemicalFertilizerKg : 0
+  const chemFertCount =
+    typeof activityImpact?.chemicalFertilizerCount === 'number' ? activityImpact.chemicalFertilizerCount : 0
+  const chemicalRecentlyApplied = Boolean(activityImpact?.chemicalRecentlyApplied)
+
+  // Simple "pressure" bucket so the prompt can be more deterministic.
+  const pesticidePressure =
+    chemPestCount >= 2 || chemPestLiters >= 5
+      ? 'high'
+      : chemPestCount > 0 || chemPestLiters > 0
+        ? 'moderate'
+        : 'none'
+
+  const soilHealthScorePart = typeof soilHealthScore === 'number' ? soilHealthScore : null
+
   const prompt = `${REG_AGRI_EXPERT_PERSONA}
 
 ${buildLanguageInstruction(lang)}
 
 User request:
+Use a warm, supportive, conversational tone. Keep it practical and easy to understand (avoid heavy jargon).
 Provide next-step advice to improve soil health and increase organic carbon.
 Be specific about regenerative practices (e.g., cover crops, compost, reduced tillage, mulching, grazing management, soil testing cadence).
 
+Location-aware context:
 ${locationLine}
+Climate zone hint: ${climateZoneHint}
+
+Recent local weather (approx, from nearby forecast):
+- Temp now: ${tempNowC == null ? 'unknown' : tempNowC} C
+- Humidity now: ${humidityNowPct == null ? 'unknown' : humidityNowPct}%${humidityBucket ? ' (' + humidityBucket + ')' : ''}
+- Wind: ${windKph == null ? 'unknown' : windKph} kph
+- Precip now: ${precipNowMm == null ? 'unknown' : precipNowMm} mm
+- Precip sum (recent daily): ${precipSumMm == null ? 'unknown' : precipSumMm} mm
+- Sun/heat bucket: ${sunBucket == null ? 'unknown' : sunBucket}
+- Frost risk (<=2C): ${frostRisk48h ? 'yes' : 'no'}
+
+Farmer context (personalization + constraints):
+- Soil type: ${soilTypePart}
+- Field size: ${fieldSizePart}
+- Workforce: ${workforcePart} people
+- Available equipment: ${equipmentList || 'manual tools only'}
+- Recent activity (last ~7 days):
+  - Organic inputs: ${organicKg} kg across ${organicCount} events
+  - Compost recently added: ${compostRecentlyAdded ? 'yes' : 'no'}
+  - Chemical pesticides: ${chemPestLiters} liters across ${chemPestCount} events
+  - Chemical fertilizer: ${chemFertKg} kg across ${chemFertCount} events
+
+Farmer progress signal:
+- Current soil health score (from your activity): ${
+    soilHealthScorePart == null ? 'unknown' : soilHealthScorePart
+  }/100
+
+Constraints:
+- If no tractor is available, do NOT suggest mechanized tasks that require a tractor.
+- If no drip irrigation is available, do NOT suggest drip-specific irrigation instructions.
+- If chemical pesticides were applied recently (${chemicalRecentlyApplied ? 'yes' : 'no'}), prioritize monitoring + soil biology recovery and avoid recommending further chemical sprays.
+
+- If soil type suggests sandy (${soilIsSandy ? 'yes' : 'no'}) and pesticide pressure is ${pesticidePressure} (moderate/high), prioritize rebuilding organic matter (compost, mulching, cover crops) and avoid recommending additional chemical pesticides.
+- If the climate zone hint suggests dryness (Dry / Dry & Hot / Dry & Warm), prioritize moisture retention with mulching and careful watering, and reduce bare-soil exposure.
+- If the climate zone hint suggests wet conditions (Humid / Wet), prioritize ground cover, reduce runoff/erosion, and avoid over-activating soils.
+- If frost risk is 'yes', recommend protective soil cover and avoid anything likely to increase frost damage.
 
 Return plain text (no markdown), with these sections:
 1) Soil health snapshot
@@ -119,7 +227,7 @@ Return plain text (no markdown), with these sections:
 3) What to measure (soil indicators to track)
 4) 30-day starter actions
 
-Keep it concise and actionable.`
+Keep it concise, friendly, and actionable. Avoid heavy jargon. Use simple farmer language.`
 
   try {
     const text = await generateClaudeText(prompt)
@@ -556,7 +664,14 @@ Rules:
 }
 
 // Task 9: Daily Task Engine.
-export async function generateDailyTasks({ weatherSummary, soilHealthScore, lang, correlationId } = {}) {
+export async function generateDailyTasks({
+  weatherSummary,
+  soilHealthScore,
+  lang,
+  correlationId,
+  profile,
+  activityImpact,
+} = {}) {
   const t0 = performance.now()
   const model = getResolvedClaudeModelName()
   claudeLog.info(
@@ -575,6 +690,42 @@ ${JSON.stringify(weatherSummary)}
 
 Soil Health Score:
 ${soilHealthScore}
+
+Farmer context (personalization + constraints):
+- Soil type: ${profile?.soilType || 'unknown'}
+- Field size: ${
+  typeof profile?.fieldSize?.value === 'number' ? `${profile.fieldSize.value} ${profile.fieldSize.unit}` : 'not provided'
+}
+- Workforce: ${
+  typeof profile?.workforce === 'number' && Number.isFinite(profile.workforce) ? String(profile.workforce) : 'unknown'
+} people
+- Available equipment: ${
+  profile?.equipment
+    ? [
+        profile.equipment.shovel ? 'shovel' : null,
+        profile.equipment.tractor ? 'tractor' : null,
+        profile.equipment.sprinkler ? 'sprinkler' : null,
+        profile.equipment.dripIrrigation ? 'drip irrigation' : null,
+      ]
+        .filter(Boolean)
+        .join(', ')
+    : 'manual tools only'
+}
+- Recent activity (last ~7 days):
+  - Organic inputs: ${typeof activityImpact?.organicKg === 'number' ? activityImpact.organicKg : 0} kg across ${
+    typeof activityImpact?.organicCount === 'number' ? activityImpact.organicCount : 0
+  } events
+  - Chemical pesticides: ${typeof activityImpact?.chemicalPesticideLiters === 'number' ? activityImpact.chemicalPesticideLiters : 0} liters across ${
+    typeof activityImpact?.chemicalPesticideCount === 'number' ? activityImpact.chemicalPesticideCount : 0
+  } events
+  - Chemical fertilizer: ${typeof activityImpact?.chemicalFertilizerKg === 'number' ? activityImpact.chemicalFertilizerKg : 0} kg across ${
+    typeof activityImpact?.chemicalFertilizerCount === 'number' ? activityImpact.chemicalFertilizerCount : 0
+  } events
+
+Constraints:
+- If no tractor is available, avoid mechanized tasks that require a tractor.
+- If no drip irrigation is available, avoid drip-specific irrigation tasks.
+- If chemical pesticides were applied recently, prioritize monitoring + soil biology recovery and avoid recommending further chemical sprays.
 
 Return ONLY strict JSON (no markdown, no commentary) with this schema:
 {

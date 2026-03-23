@@ -1116,6 +1116,37 @@
   background: rgba(124, 166, 137, 0.06);
   flex: 1 1 auto;
   min-width: 170px;
+  position: relative;
+  overflow: hidden;
+}
+
+.green-score-progress-track {
+  position: absolute;
+  inset: 0;
+  background: rgba(136, 176, 133, 0.12); /* Soft, cool green */
+  z-index: 0;
+  pointer-events: none;
+}
+
+.green-score-progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  border-radius: 999px;
+  background: rgba(136, 176, 133, 0.55); /* Soft, cool green fill */
+  z-index: 0;
+  pointer-events: none;
+}
+
+.green-score-pill-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
 }
 
 .green-score-label {
@@ -1318,5 +1349,398 @@
   .scanner-grid {
     grid-template-columns: 1fr 1fr;
     align-items: start;
+  }
+}
+
+/* Compost Guide */
+.compost-guide {
+  margin-top: 14px;
+  border: 1px solid rgba(136, 176, 133, 0.28);
+  background: rgba(136, 176, 133, 0.06);
+  border-radius: 16px;
+  padding: 14px;
+}
+
+.compost-guide-compact {
+  padding: 12px;
+  margin-top: 10px;
+}
+
+.compost-guide-header {
+  margin-bottom: 12px;
+}
+
+.compost-guide-kicker {
+  font-weight: 900;
+  color: var(--text-h);
+  font-size: 12px;
+  opacity: 0.85;
+  margin: 0 0 6px;
+}
+
+.compost-guide-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 950;
+  color: var(--text-h);
+}
+
+.compost-guide-subtitle {
+  margin: 8px 0 0;
+}
+
+.compost-guide-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.compost-guide-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.compost-guide-section-title {
+  margin: 0 0 8px;
+  font-weight: 950;
+  color: var(--text-h);
+  font-size: 13px;
+}
+
+.compost-guide-bullets {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text);
+  opacity: 0.92;
+  font-size: 13px;
+}
+
+.compost-guide-bullets-tight {
+  gap: 5px;
+}
+
+.compost-guide-steps {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text);
+  opacity: 0.92;
+  font-size: 13px;
+}
+
+.compost-guide-layer-group {
+  margin-top: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(136, 176, 133, 0.22);
+  background: rgba(136, 176, 133, 0.05);
+  padding: 12px;
+}
+
+.compost-guide-layer-title {
+  margin: 0 0 6px;
+  font-weight: 950;
+  color: var(--text-h);
+  font-size: 12.5px;
+}
+
+.compost-guide-media {
+  margin-top: 12px;
+}
+
+.compost-guide-media-title {
+  margin-top: 0;
+}
+
+.compost-guide-media-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.compost-guide-media-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.compost-guide-media-card {
+  border-radius: 14px;
+  border: 1px dashed rgba(136, 176, 133, 0.46);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 12px;
+  min-height: 92px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.compost-guide-media-image {
+  width: 100%;
+  height: 78px;
+  object-fit: cover;
+  border-radius: 10px;
+}
+
+.compost-guide-video-frame {
+  width: 100%;
+  position: relative;
+  padding-top: 56.25%; /* 16:9 */
+}
+
+.compost-guide-video-iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 10px;
+}
+
+.compost-guide-media-placeholder,
+.compost-guide-video-placeholder {
+  font-size: 13px;
+  font-weight: 900;
+  color: var(--text-h);
+  opacity: 0.85;
+}
+
+.compost-guide-media-note {
+  margin-top: 10px;
+}
+
+@media (max-width: 760px) {
+  .compost-guide-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Educational Guide (Medium-style) */
+.guide-insights-scroll {
+  max-height: 62vh;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.educational-guide {
+  margin: 0 auto;
+  max-width: 720px;
+}
+
+.educational-guide-meta {
+  margin-bottom: 10px;
+}
+
+.educational-guide-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.educational-guide-badge {
+  font-weight: 950;
+  color: var(--text-h);
+  font-size: 12px;
+  border: 1px solid rgba(136, 176, 133, 0.35);
+  background: rgba(136, 176, 133, 0.08);
+  padding: 6px 10px;
+  border-radius: 999px;
+}
+
+.educational-guide-hero {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 950;
+  color: var(--text-h);
+}
+
+.educational-guide-hero-sub {
+  margin: 8px 0 14px;
+  line-height: 1.45;
+  opacity: 0.92;
+}
+
+.educational-guide-recommended {
+  border-radius: 16px;
+  border: 1px solid rgba(136, 176, 133, 0.30);
+  background: rgba(136, 176, 133, 0.06);
+  padding: 12px;
+  margin-bottom: 14px;
+}
+
+.educational-guide-recommended-top {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.educational-guide-recommended-label {
+  font-weight: 950;
+  font-size: 12px;
+  color: var(--text-h);
+  opacity: 0.85;
+}
+
+.educational-guide-recommended-link {
+  font-weight: 950;
+  color: var(--primary);
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(var(--primary), 0.35);
+}
+
+.educational-guide-recommended-desc {
+  margin: 8px 0 0;
+  opacity: 0.92;
+  line-height: 1.45;
+}
+
+.educational-guide-article {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.educational-guide-section {
+  border-radius: 16px;
+  border: 1px solid rgba(26, 67, 50, 0.16);
+  background: rgba(124, 166, 137, 0.03);
+  padding: 14px;
+}
+
+.educational-guide-h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 950;
+  color: var(--text-h);
+}
+
+.educational-guide-p {
+  margin: 0;
+  opacity: 0.92;
+  line-height: 1.5;
+}
+
+.educational-guide-quote {
+  margin: 12px 0;
+  padding-left: 14px;
+  border-left: 4px solid rgba(136, 176, 133, 0.55);
+  font-weight: 900;
+  color: var(--text-h);
+  opacity: 0.95;
+  line-height: 1.45;
+}
+
+.educational-guide-infobox {
+  margin: 12px 0;
+}
+
+.educational-guide-infocard {
+  border-radius: 14px;
+  border: 1px solid rgba(136, 176, 133, 0.22);
+  background: rgba(136, 176, 133, 0.05);
+  padding: 10px;
+}
+
+.educational-guide-infographic {
+  border-radius: 12px;
+  border: 1px dashed rgba(136, 176, 133, 0.55);
+  background: rgba(255, 255, 255, 0.02);
+  height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 950;
+  color: var(--text-h);
+  opacity: 0.85;
+  text-align: center;
+  padding: 8px;
+}
+
+.educational-guide-infographic-image {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid rgba(136, 176, 133, 0.20);
+}
+
+.educational-guide-infocaption {
+  margin: 8px 0 0;
+  opacity: 0.86;
+  line-height: 1.45;
+  font-size: 13px;
+}
+
+.educational-guide-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  opacity: 0.92;
+}
+
+.educational-guide-zone-card {
+  border-radius: 14px;
+  border: 1px solid rgba(136, 176, 133, 0.26);
+  background: rgba(136, 176, 133, 0.06);
+  padding: 12px;
+  margin-top: 12px;
+}
+
+.educational-guide-zone-card-title {
+  font-weight: 950;
+  color: var(--text-h);
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.educational-guide-zone-card-body {
+  margin: 0;
+  line-height: 1.5;
+  opacity: 0.92;
+}
+
+.educational-guide-goodbad {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.educational-guide-goodbad-item {
+  border-radius: 14px;
+  border: 1px solid rgba(26, 67, 50, 0.16);
+  background: rgba(124, 166, 137, 0.03);
+  overflow: hidden;
+}
+
+.educational-guide-goodbad-img {
+  width: 100%;
+  height: 92px;
+  object-fit: cover;
+}
+
+.educational-guide-goodbad-caption {
+  padding: 10px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  opacity: 0.9;
+}
+
+@media (max-width: 760px) {
+  .guide-insights-scroll {
+    max-height: 68vh;
+  }
+  .educational-guide-goodbad {
+    grid-template-columns: 1fr;
   }
 }

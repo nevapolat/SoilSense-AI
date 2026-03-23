@@ -1,10 +1,9 @@
 import './App.css'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BadgeCheck, BookOpen, Leaf, TreePine, Camera, Globe2, Sun, Droplet } from 'lucide-react'
 import {
   generateKnowledgeHub,
   generateRegenerativeAdvice,
-  generateSmartAlert,
   generateSoilVitalityScore,
   buildSoilVitalityScoreFallback,
   generateDailyTasks,
@@ -14,11 +13,13 @@ import {
   testGeminiApiKey,
 } from './lib/gemini'
 import CompostWizard from './components/CompostWizard'
+import CompostGuide from './components/CompostGuide'
 import SoilVitalityScore from './components/SoilVitalityScore'
 import PlantScanner from './components/PlantScanner'
 import DiagnosticsPanel from './components/DiagnosticsPanel'
 import { useI18n } from './i18n/useI18n'
 import { bucketAccuracyMeters, createLogger, generateRunId, normalizeErrorForLog } from './lib/logger'
+import EducationalGuide from './components/EducationalGuide'
 
 const storageLog = createLogger('storage')
 const geoLog = createLogger('geo')
@@ -40,10 +41,12 @@ const PROFILE_STORAGE_KEY = 'soilsense.profile'
 const ACTIVITY_LOG_STORAGE_KEY = 'soilsense.activityLog'
 
 const ACTIVITY_TYPES = [
-  { id: 'added-eggshells', points: 4 },
-  { id: 'watered', points: 2 },
-  { id: 'added-compost', points: 5 },
-  { id: 'used-organic-fertilizer', points: 3 },
+  { id: 'added-eggshells', category: 'organic-matter', defaultQuantity: 1, defaultUnit: 'kg' },
+  { id: 'watered', category: 'water', defaultQuantity: 1, defaultUnit: 'liters' },
+  { id: 'added-compost', category: 'organic-matter', defaultQuantity: 5, defaultUnit: 'kg' },
+  { id: 'used-organic-fertilizer', category: 'organic-matter', defaultQuantity: 2, defaultUnit: 'kg' },
+  { id: 'pesticide-application', category: 'pesticide', defaultQuantity: 1, defaultUnit: 'liters' },
+  { id: 'fertilizer-application', category: 'fertilizer', defaultQuantity: 1, defaultUnit: 'kg' },
 ]
 
 function loadProfile() {
@@ -63,6 +66,38 @@ function loadProfile() {
   } catch (err) {
     storageLog.warn('storage.read.failed', { key: PROFILE_STORAGE_KEY, ...normalizeErrorForLog(err) })
     return null
+  }
+}
+
+function normalizeProfile(profile) {
+  const p = profile && typeof profile === 'object' ? profile : {}
+  const soilType = typeof p.soilType === 'string' ? p.soilType : 'loam'
+  const latitude = typeof p.latitude === 'number' ? p.latitude : null
+  const longitude = typeof p.longitude === 'number' ? p.longitude : null
+
+  const fieldSizeRaw = p.fieldSize && typeof p.fieldSize === 'object' ? p.fieldSize : {}
+  const fieldSizeValue =
+    typeof fieldSizeRaw.value === 'number' && Number.isFinite(fieldSizeRaw.value) ? fieldSizeRaw.value : null
+  const fieldSizeUnit = fieldSizeRaw.unit === 'sqm' || fieldSizeRaw.unit === 'ha' ? fieldSizeRaw.unit : 'ha'
+
+  const workforce = typeof p.workforce === 'number' && Number.isFinite(p.workforce) ? p.workforce : null
+
+  const equipmentRaw = p.equipment && typeof p.equipment === 'object' ? p.equipment : {}
+  const equipment = {
+    shovel: Boolean(equipmentRaw.shovel),
+    tractor: Boolean(equipmentRaw.tractor),
+    sprinkler: Boolean(equipmentRaw.sprinkler),
+    dripIrrigation: Boolean(equipmentRaw.dripIrrigation),
+  }
+
+  return {
+    soilType,
+    latitude,
+    longitude,
+    fieldSize: { value: fieldSizeValue, unit: fieldSizeUnit },
+    workforce,
+    equipment,
+    updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : undefined,
   }
 }
 
@@ -148,24 +183,6 @@ function buildSmartAlertFallback(signals, t) {
     }
   }
 
-  if (evaporationRisk) {
-    return {
-      riskType: 'high-evaporation',
-      isCritical: false,
-      headline: t ? t('common.smartAlertFallback.high-evaporation.headline') : 'High evaporation risk today — mulch your soil!',
-      recommendedAction: t
-        ? t('common.smartAlertFallback.high-evaporation.recommendedAction')
-        : 'Apply a thick mulch layer (straw/leaf mold) to reduce evaporation. Water more deeply and less frequently, and prioritize soil cover over bare ground.',
-      details: t
-        ? t('common.smartAlertFallback.high-evaporation.details')
-        : `Signals: now ${toFixedOrDash(tNow, 1)}C, wind ${toFixedOrDash(windKph, 0)} kph, humidity ${toFixedOrDash(humidity, 0)}%.`,
-      actionPlan: t
-        ? t('common.smartAlertFallback.high-evaporation.actionPlan')
-        : 'Refresh mulch if it thins and water deeply early/late to reduce evaporation.',
-      tags: t ? t('common.smartAlertFallback.high-evaporation.tags') : ['Evaporation', 'Mulch', 'Moisture'],
-    }
-  }
-
   if (heavyRainRisk) {
     return {
       riskType: 'heavy-rain',
@@ -198,6 +215,24 @@ function buildSmartAlertFallback(signals, t) {
     }
   }
 
+  if (evaporationRisk) {
+    return {
+      riskType: 'high-evaporation',
+      isCritical: false,
+      headline: t ? t('common.smartAlertFallback.high-evaporation.headline') : 'High evaporation risk today — mulch your soil!',
+      recommendedAction: t
+        ? t('common.smartAlertFallback.high-evaporation.recommendedAction')
+        : 'Apply a thick mulch layer (straw/leaf mold) to reduce evaporation. Water more deeply and less frequently, and prioritize soil cover over bare ground.',
+      details: t
+        ? t('common.smartAlertFallback.high-evaporation.details')
+        : `Signals: now ${toFixedOrDash(tNow, 1)}C, wind ${toFixedOrDash(windKph, 0)} kph, humidity ${toFixedOrDash(humidity, 0)}%.`,
+      actionPlan: t
+        ? t('common.smartAlertFallback.high-evaporation.actionPlan')
+        : 'Refresh mulch if it thins and water deeply early/late to reduce evaporation.',
+      tags: t ? t('common.smartAlertFallback.high-evaporation.tags') : ['Evaporation', 'Mulch', 'Moisture'],
+    }
+  }
+
   return {
     riskType: 'general',
     isCritical: false,
@@ -214,6 +249,37 @@ function buildSmartAlertFallback(signals, t) {
       : 'Maintain consistent ground cover and schedule your next soil/plant check when conditions shift.',
     tags: t ? t('common.smartAlertFallback.general.tags') : ['Soil health', 'Mulch', 'Compost'],
   }
+}
+
+function smartAlertLegacyToUiModel(legacy) {
+  const recommendedAction = legacy?.recommendedAction
+  const actionPlan = legacy?.actionPlan
+  const instruction = [recommendedAction, actionPlan].filter((x) => typeof x === 'string' && x.trim().length)
+
+  return {
+    status: typeof legacy?.headline === 'string' && legacy.headline.trim() ? legacy.headline : null,
+    reason: typeof legacy?.details === 'string' && legacy.details.trim() ? legacy.details : null,
+    instruction,
+    riskType: legacy?.riskType || 'unknown',
+    isCritical: Boolean(legacy?.isCritical),
+    tags: Array.isArray(legacy?.tags) ? legacy.tags : [],
+  }
+}
+
+function weatherSignalsFingerprint(signals) {
+  if (!signals || typeof signals !== 'object') return 'null'
+  const parts = [
+    typeof signals?.tempNowC === 'number' ? signals.tempNowC.toFixed(1) : '—',
+    typeof signals?.humidityNowPct === 'number' ? Math.round(signals.humidityNowPct) : '—',
+    typeof signals?.windKph === 'number' ? Math.round(signals.windKph) : '—',
+    typeof signals?.precipitationSumMm === 'number' ? Math.round(signals.precipitationSumMm) : '—',
+    typeof signals?.tempMinC === 'number' ? signals.tempMinC.toFixed(1) : '—',
+    typeof signals?.tempMaxC === 'number' ? signals.tempMaxC.toFixed(1) : '—',
+    typeof signals?.next48hMinTempC === 'number' ? signals.next48hMinTempC.toFixed(1) : '—',
+    typeof signals?.firstBelow2CInHours === 'number' ? Math.round(signals.firstBelow2CInHours) : '—',
+    typeof signals?.weatherCode === 'number' ? signals.weatherCode : '—',
+  ]
+  return parts.join('|')
 }
 
 function buildDailyTasksFallback(signals, t) {
@@ -509,6 +575,36 @@ async function fetchOpenMeteoSignals(latitude, longitude, { correlationId } = {}
   }
 }
 
+function deriveClimateZoneHintFromWeatherSignals(signals) {
+  // Heuristic "climate zone" hint for the Soil Health Advisor.
+  // (We don't store a formal Köppen classification in this app, but we can still tailor guidance
+  // based on moisture + temperature patterns from recent local weather.)
+  const humidityBucket = signals?.humidityBucket
+  const sunBucket = signals?.sunBucket
+  const precipSumMm =
+    typeof signals?.precipitationSumMm === 'number' && Number.isFinite(signals.precipitationSumMm)
+      ? signals.precipitationSumMm
+      : null
+  const tempNowC = typeof signals?.tempNowC === 'number' && Number.isFinite(signals.tempNowC) ? signals.tempNowC : null
+
+  const frostRisk48h =
+    typeof signals?.firstBelow2CInHours === 'number'
+      ? signals.firstBelow2CInHours <= 48
+      : typeof signals?.next48hMinTempC === 'number'
+        ? signals.next48hMinTempC < signals.frostThresholdC
+        : false
+
+  if (frostRisk48h) return 'Cold (frost risk)'
+
+  const likelyDry = humidityBucket === 'low' || (precipSumMm != null ? precipSumMm < 5 : false)
+  const likelyWet = humidityBucket === 'high' || (precipSumMm != null ? precipSumMm >= 10 : false)
+
+  if (likelyDry) return sunBucket === 'hot' ? 'Dry & Hot' : sunBucket === 'warm' ? 'Dry & Warm' : 'Dry'
+  if (likelyWet) return 'Humid / Wet'
+  if (tempNowC != null && tempNowC <= 12) return 'Cool'
+  return 'Temperate'
+}
+
 export default function SoilSenseApp() {
   const { lang, changeLanguage: i18nChangeLanguage, t } = useI18n()
   const [isLangMenuOpen, setIsLangMenuOpen] = useState(false)
@@ -563,17 +659,24 @@ export default function SoilSenseApp() {
   const [aiError, setAiError] = useState('')
   const lastAdviceCoordsKeyRef = useRef('')
 
-  // Smart Alert card (weather + Gemini, with deterministic fallback).
+  // Smart Alert card (weather + user biological/activity signals via a deterministic engine).
   const [smartStatus, setSmartStatus] = useState('idle') // idle|loading|success|error
   const [smartError, setSmartError] = useState('')
-  const [smartAlert, setSmartAlert] = useState(null)
+  const [smartWeatherSignals, setSmartWeatherSignals] = useState(null)
+  const [plantScanResult, setPlantScanResult] = useState(null)
   const lastAlertCoordsKeyRef = useRef('')
+  const lastSmartWeatherFingerprintRef = useRef('')
+  const smartWeatherFetchInFlightRef = useRef(false)
+  const smartWeatherLastFetchAtRef = useRef(0)
+  const SMART_WEATHER_REFRESH_MS = 10 * 60 * 1000 // keep alert “alive” without excessive API calls
 
   // Task 7 (UI upgrade): Soil Vitality Score (0-100)
   const [vitalityStatus, setVitalityStatus] = useState('idle') // idle|loading|success|error
   const [vitalityError, setVitalityError] = useState('')
   const [vitalityScore, setVitalityScore] = useState(null)
   const [vitalityExplanation, setVitalityExplanation] = useState('')
+  const [vitalityBaseScore, setVitalityBaseScore] = useState(null)
+  const [vitalityBaseExplanation, setVitalityBaseExplanation] = useState('')
 
   // Task 10 (Sustainability): Green Score & badge.
   const GREEN_SCORE_KEY = 'soilsense.greenScore'
@@ -595,11 +698,6 @@ export default function SoilSenseApp() {
       return 0
     }
   })
-
-  const greenLevel = useMemo(() => {
-    const found = GREEN_LEVELS.find((l) => greenScore >= l.min && greenScore <= l.max)
-    return found || GREEN_LEVELS[0]
-  }, [GREEN_LEVELS, greenScore])
 
   function addGreenPoints(points) {
     const delta = Number(points)
@@ -633,12 +731,174 @@ export default function SoilSenseApp() {
 
   // Profile + Activity system
   const [profileOpen, setProfileOpen] = useState(false)
-  const [profile, setProfile] = useState(() => loadProfile())
-  const [soilTypeDraft, setSoilTypeDraft] = useState(
-    () => loadProfile()?.soilType || 'loam'
-  )
+  const [profile, setProfile] = useState(() => normalizeProfile(loadProfile()))
+  const [soilTypeDraft, setSoilTypeDraft] = useState(() => normalizeProfile(loadProfile()).soilType)
+  const [fieldSizeDraft, setFieldSizeDraft] = useState(() => {
+    const p = normalizeProfile(loadProfile())
+    return typeof p.fieldSize?.value === 'number' ? String(p.fieldSize.value) : ''
+  })
+  const [fieldSizeUnitDraft, setFieldSizeUnitDraft] = useState(() => {
+    const p = normalizeProfile(loadProfile())
+    return p.fieldSize?.unit || 'ha'
+  })
+  const [workforceDraft, setWorkforceDraft] = useState(() => {
+    const p = normalizeProfile(loadProfile())
+    return typeof p.workforce === 'number' ? String(p.workforce) : ''
+  })
+  const [equipmentDraft, setEquipmentDraft] = useState(() => {
+    const p = normalizeProfile(loadProfile())
+    return p.equipment || { shovel: false, tractor: false, sprinkler: false, dripIrrigation: false }
+  })
   const [activityLog, setActivityLog] = useState(() => loadActivityLog())
   const [activityPickerOpen, setActivityPickerOpen] = useState(false)
+  const [activityDraftTypeId, setActivityDraftTypeId] = useState('')
+  const [activityDraftQuantity, setActivityDraftQuantity] = useState('')
+  const [activityDraftUnit, setActivityDraftUnit] = useState('')
+  const [activityDraftPesticideKind, setActivityDraftPesticideKind] = useState('chemical')
+  const [activityDraftFertilizerType, setActivityDraftFertilizerType] = useState('organic')
+  const [activityDraftError, setActivityDraftError] = useState('')
+
+  const [compostGuideOpen, setCompostGuideOpen] = useState(false)
+
+  const smartAlert = useMemo(() => {
+    const signals = smartWeatherSignals && typeof smartWeatherSignals === 'object' ? smartWeatherSignals : {}
+    const legacyBase = buildSmartAlertFallback(signals, t)
+    const base = smartAlertLegacyToUiModel(legacyBase)
+
+    // Highest priority: frost critical.
+    if (base.isCritical || base.riskType === 'frost') return base
+
+    // Biological override: plant scan suggests stress/sickness.
+    const healthStatus = plantScanResult?.healthStatus
+    const isBioIssue = healthStatus === 'Sick' || healthStatus === 'Stressed'
+    if (isBioIssue) {
+      const pestKey =
+        legacyBase?.riskType === 'heavy-rain'
+          ? 'pest-check-rain'
+          : legacyBase?.riskType === 'heat-stress' || legacyBase?.riskType === 'high-evaporation'
+            ? 'pest-check-heat'
+            : 'pest-check-dry'
+
+      const plantStatusText = t(`plantScanner.status${healthStatus}`)
+      const statusTitle = t(`dashboard.fallbackTasks.${pestKey}.title`)
+      const whyThisTaskHelps = t(`dashboard.fallbackTasks.${pestKey}.whyThisTaskHelps`)
+      const steps = t(`dashboard.fallbackTasks.${pestKey}.steps`)
+
+      return {
+        status: statusTitle,
+        reason: `${plantStatusText}. ${whyThisTaskHelps}`,
+        instruction: Array.isArray(steps) ? steps.slice(0, 4) : [],
+        riskType: 'biological',
+        isCritical: false,
+        tags: [plantStatusText].filter(Boolean),
+      }
+    }
+
+    // Manual logs override: chemical inputs -> recovery monitoring; organic inputs -> moisture monitoring.
+    const nowTs = Date.now()
+    let lastOrganicTs = null
+    let lastChemicalTs = null
+
+    for (const a of activityLog) {
+      const id = a?.activityTypeId
+      const ts = new Date(a?.timestamp || 0).getTime()
+      if (!Number.isFinite(ts)) continue
+
+      if (id === 'added-compost' || id === 'used-organic-fertilizer') {
+        lastOrganicTs = lastOrganicTs == null ? ts : Math.max(lastOrganicTs, ts)
+        continue
+      }
+
+      if (id === 'fertilizer-application') {
+        const meta = a?.meta && typeof a.meta === 'object' ? a.meta : {}
+        const fertilizerType = meta?.fertilizerType || 'organic'
+        if (fertilizerType === 'organic') {
+          lastOrganicTs = lastOrganicTs == null ? ts : Math.max(lastOrganicTs, ts)
+        } else {
+          lastChemicalTs = lastChemicalTs == null ? ts : Math.max(lastChemicalTs, ts)
+        }
+        continue
+      }
+
+      if (id === 'pesticide-application') {
+        const meta = a?.meta && typeof a.meta === 'object' ? a.meta : {}
+        const pesticideKind = meta?.pesticideKind || 'chemical'
+        if (pesticideKind === 'chemical') {
+          lastChemicalTs = lastChemicalTs == null ? ts : Math.max(lastChemicalTs, ts)
+        }
+      }
+    }
+
+    const organicRecentlyAdded = typeof lastOrganicTs === 'number' && nowTs - lastOrganicTs <= 48 * 60 * 60 * 1000
+    const chemicalRecentlyApplied =
+      typeof lastChemicalTs === 'number' && nowTs - lastChemicalTs <= 72 * 60 * 60 * 1000
+
+    if (chemicalRecentlyApplied) {
+      const pestKey =
+        legacyBase?.riskType === 'heavy-rain'
+          ? 'pest-check-rain'
+          : legacyBase?.riskType === 'heat-stress' || legacyBase?.riskType === 'high-evaporation'
+            ? 'pest-check-heat'
+            : 'pest-check-dry'
+
+      const statusTitle = t(`dashboard.fallbackTasks.${pestKey}.title`)
+      const whyThisTaskHelps = t(`dashboard.fallbackTasks.${pestKey}.whyThisTaskHelps`)
+      const steps = t(`dashboard.fallbackTasks.${pestKey}.steps`)
+      const instruction = Array.isArray(steps) ? steps.slice(0, 4) : []
+
+      return {
+        ...base,
+        status: statusTitle,
+        reason: whyThisTaskHelps,
+        instruction,
+        riskType: 'biological',
+        tags: [statusTitle],
+      }
+    }
+
+    if (organicRecentlyAdded) {
+      const moistureSteps = t('dashboard.fallbackTasks.moisture-check.steps')
+      const moistureBullets = Array.isArray(moistureSteps) ? moistureSteps.slice(0, 2) : []
+      const actionPlanBullet = base.instruction?.[1] || null
+      const instruction = [ ...moistureBullets, actionPlanBullet ].filter(
+        (x) => typeof x === 'string' && x.trim().length > 0
+      )
+
+      return {
+        ...base,
+        reason: t('dashboard.fallbackTasks.moisture-check.whyThisTaskHelps'),
+        instruction,
+      }
+    }
+
+    // Profile calibration (soil type): adjust “general/stable” guidance toward realistic constraints.
+    const soilType = profile?.soilType || 'loam'
+    if (base.riskType === 'general' && soilType === 'sandy') {
+      const moistureSteps = t('dashboard.fallbackTasks.moisture-check.steps')
+      const instruction = Array.isArray(moistureSteps) ? moistureSteps.slice(0, 4) : []
+      return {
+        ...base,
+        status: t('dashboard.fallbackTasks.moisture-check.title'),
+        reason: t('dashboard.fallbackTasks.moisture-check.whyThisTaskHelps'),
+        instruction,
+        tags: [t('dashboard.fallbackTasks.moisture-check.title')],
+      }
+    }
+
+    if (base.riskType === 'general' && soilType === 'clay') {
+      const coverSteps = t('dashboard.fallbackTasks.soil-cover-dry.steps')
+      const instruction = Array.isArray(coverSteps) ? coverSteps.slice(0, 4) : []
+      return {
+        ...base,
+        status: t('dashboard.fallbackTasks.soil-cover-dry.title'),
+        reason: t('dashboard.fallbackTasks.soil-cover-dry.whyThisTaskHelps'),
+        instruction,
+        tags: [t('dashboard.fallbackTasks.soil-cover-dry.title')],
+      }
+    }
+
+    return base
+  }, [smartWeatherSignals, activityLog, plantScanResult, t, lang, profile])
 
   const refreshCycleKeyRef = useRef('')
   const runIdRef = useRef(null)
@@ -723,28 +983,248 @@ export default function SoilSenseApp() {
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
   }, [activityLog])
 
-  const activityImpactPoints = useMemo(() => {
-    const sum = recentActivities.reduce((acc, item) => {
-      const def = ACTIVITY_TYPES.find((x) => x.id === item.activityTypeId)
-      return acc + (def?.points || 0)
-    }, 0)
-    return Math.max(0, Math.min(20, sum))
-  }, [recentActivities])
+  const activityImpact = useMemo(() => {
+    // Quantitative + contextual impact window.
+    const now = Date.now()
+    const weekMs = 7 * 24 * 60 * 60 * 1000
+    const fieldAreaHa =
+      profile?.fieldSize?.value && typeof profile.fieldSize.value === 'number'
+        ? profile.fieldSize.unit === 'ha'
+          ? profile.fieldSize.value
+          : profile.fieldSize.value / 10000
+        : null
+
+    const soilType = profile?.soilType || 'loam'
+    const soilTypeOrganicMultiplier = soilType === 'sandy' ? 1.15 : soilType === 'clay' ? 1.05 : 1.08
+
+    let organicKg = 0
+    let organicCount = 0
+    let chemicalPesticideLiters = 0
+    let chemicalPesticideCount = 0
+    let chemicalFertilizerKg = 0
+    let chemicalFertilizerCount = 0
+
+    let lastOrganicTs = null
+    let lastChemicalTs = null
+
+    function toOrganicKg(quantity, unit) {
+      if (typeof quantity !== 'number' || !Number.isFinite(quantity)) return 0
+      if (unit === 'kg' || !unit) return quantity
+      if (unit === 'bags') return quantity * 10 // reasonable default for “kg-ish” bags
+      return quantity
+    }
+
+    function toPesticideDose(quantity, unit) {
+      if (typeof quantity !== 'number' || !Number.isFinite(quantity)) return 0
+      if (unit === 'liters' || !unit) return quantity
+      if (unit === 'kg' || unit === 'g') {
+        if (unit === 'g') return quantity / 1000
+        return quantity
+      }
+      return quantity
+    }
+
+    function toFertilizerKg(quantity, unit) {
+      if (typeof quantity !== 'number' || !Number.isFinite(quantity)) return 0
+      if (unit === 'kg' || !unit) return quantity
+      if (unit === 'bags') return quantity * 10
+      return quantity
+    }
+
+    for (const act of recentActivities) {
+      const ts = new Date(act?.timestamp || 0).getTime()
+      if (!Number.isFinite(ts) || now - ts > weekMs) continue
+
+      const qty = typeof act?.quantity === 'number' ? act.quantity : null
+      const unit = typeof act?.unit === 'string' ? act.unit : null
+      const meta = act?.meta && typeof act.meta === 'object' ? act.meta : {}
+
+      if (act?.activityTypeId === 'added-compost' || act?.activityTypeId === 'used-organic-fertilizer') {
+        const kg = toOrganicKg(qty ?? ACTIVITY_TYPES.find((x) => x.id === act.activityTypeId)?.defaultQuantity ?? 1, unit)
+        organicKg += kg
+        organicCount += 1
+        lastOrganicTs = lastOrganicTs == null ? ts : Math.max(lastOrganicTs, ts)
+      } else if (act?.activityTypeId === 'fertilizer-application') {
+        const fertilizerType = meta?.fertilizerType || 'organic'
+        const kg = toFertilizerKg(qty ?? 1, unit)
+        if (fertilizerType === 'organic') {
+          organicKg += kg
+          organicCount += 1
+          lastOrganicTs = lastOrganicTs == null ? ts : Math.max(lastOrganicTs, ts)
+        } else {
+          chemicalFertilizerKg += kg
+          chemicalFertilizerCount += 1
+          lastChemicalTs = lastChemicalTs == null ? ts : Math.max(lastChemicalTs, ts)
+        }
+      } else if (act?.activityTypeId === 'pesticide-application') {
+        const pesticideKind = meta?.pesticideKind || 'chemical'
+        if (pesticideKind !== 'chemical') continue
+        const dose = toPesticideDose(qty ?? ACTIVITY_TYPES.find((x) => x.id === act.activityTypeId)?.defaultQuantity ?? 1, unit)
+        chemicalPesticideLiters += dose
+        chemicalPesticideCount += 1
+        lastChemicalTs = lastChemicalTs == null ? ts : Math.max(lastChemicalTs, ts)
+      } else if (act?.activityTypeId === 'added-eggshells') {
+        // Minor positive effect (buffers calcium availability + slow biology support).
+        organicKg += toOrganicKg(qty ?? 1, unit) * 0.05
+        organicCount += 1
+        lastOrganicTs = lastOrganicTs == null ? ts : Math.max(lastOrganicTs, ts)
+      } else if (act?.activityTypeId === 'watered') {
+        // Water supports microbial activity; keep it small vs compost/pesticides.
+        organicKg += toOrganicKg(qty ?? 1, unit) * 0.01
+        organicCount += 1
+        lastOrganicTs = lastOrganicTs == null ? ts : Math.max(lastOrganicTs, ts)
+      }
+    }
+
+    const organicDose = fieldAreaHa && fieldAreaHa > 0 ? organicKg / fieldAreaHa : organicKg
+    const pesticideDose = fieldAreaHa && fieldAreaHa > 0 ? chemicalPesticideLiters / fieldAreaHa : chemicalPesticideLiters
+    const chemicalFertilizerDose = fieldAreaHa && fieldAreaHa > 0 ? chemicalFertilizerKg / fieldAreaHa : chemicalFertilizerKg
+
+    const organicDoseFactor = organicDose > 0 ? Math.log(1 + organicDose) / Math.log(1 + 5) : 0
+    const pesticideDoseFactor = pesticideDose > 0 ? Math.log(1 + pesticideDose) / Math.log(1 + 5) : 0
+    const chemicalFertilizerDoseFactor =
+      chemicalFertilizerDose > 0 ? Math.log(1 + chemicalFertilizerDose) / Math.log(1 + 5) : 0
+
+    const organicFreq = organicCount > 0 ? Math.min(1.4, 1 + 0.08 * Math.max(0, organicCount - 1)) : 1
+    const pesticideFreq =
+      chemicalPesticideCount > 0 ? Math.min(1.45, 1 + 0.1 * Math.max(0, chemicalPesticideCount - 1)) : 1
+    const chemicalFertilizerFreq =
+      chemicalFertilizerCount > 0 ? Math.min(1.3, 1 + 0.08 * Math.max(0, chemicalFertilizerCount - 1)) : 1
+
+    // Soil health: compost improves structure + biology; pesticides reduce them.
+    const organicSoilDelta = organicDoseFactor * organicFreq * 16 * soilTypeOrganicMultiplier
+    const pesticideSoilDelta = -pesticideDoseFactor * pesticideFreq * 22
+    const chemicalFertilizerSoilDelta = -chemicalFertilizerDoseFactor * chemicalFertilizerFreq * 9
+
+    const soilHealthDelta = organicSoilDelta + pesticideSoilDelta + chemicalFertilizerSoilDelta
+
+    // Sustainability: track “greenness” more conservatively than soil health.
+    const organicSustainDelta = organicSoilDelta * 0.55
+    const pesticideSustainDelta = pesticideSoilDelta * 0.7
+    const chemicalFertilizerSustainDelta = chemicalFertilizerSoilDelta * 0.6
+    const sustainabilityDelta = organicSustainDelta + pesticideSustainDelta + chemicalFertilizerSustainDelta
+
+    const compostRecentlyAdded = typeof lastOrganicTs === 'number' && now - lastOrganicTs <= 48 * 60 * 60 * 1000
+    const chemicalRecentlyApplied = typeof lastChemicalTs === 'number' && now - lastChemicalTs <= 72 * 60 * 60 * 1000
+
+    const fingerprint = [
+      profile?.soilType || 'loam',
+      fieldAreaHa == null ? 'na' : fieldAreaHa.toFixed(2),
+      `orgKg:${organicKg.toFixed(1)}`,
+      `orgN:${organicCount}`,
+      `pestDose:${chemicalPesticideLiters.toFixed(1)}`,
+      `pestN:${chemicalPesticideCount}`,
+      `chemFertKg:${chemicalFertilizerKg.toFixed(1)}`,
+      `chemFertN:${chemicalFertilizerCount}`,
+      `orgTs:${lastOrganicTs ? Math.round(lastOrganicTs / 60000) : 0}`,
+      `chemTs:${lastChemicalTs ? Math.round(lastChemicalTs / 60000) : 0}`,
+    ].join('|')
+
+    return {
+      soilHealthDelta,
+      sustainabilityDelta,
+      organicKg,
+      organicCount,
+      chemicalPesticideLiters,
+      chemicalPesticideCount,
+      chemicalFertilizerKg,
+      chemicalFertilizerCount,
+      compostRecentlyAdded,
+      chemicalRecentlyApplied,
+      fingerprint,
+    }
+  }, [activityLog, profile, recentActivities])
 
   function applyActivityImpact(baseScore) {
-    if (typeof baseScore !== 'number') return baseScore
-    const adjusted = Math.round(baseScore + activityImpactPoints)
+    if (typeof baseScore !== 'number' || !Number.isFinite(baseScore)) return baseScore
+    const adjusted = Math.round(baseScore + activityImpact.soilHealthDelta)
     return Math.max(0, Math.min(100, adjusted))
+  }
+
+  const effectiveGreenScore = useMemo(() => {
+    const adjusted = Math.round(greenScore + (activityImpact?.sustainabilityDelta || 0))
+    return Math.max(0, Math.min(100, adjusted))
+  }, [greenScore, activityImpact])
+
+  const prevEffectiveGreenScoreRef = useRef(effectiveGreenScore)
+  const shouldAnimateGreenScoreFill = effectiveGreenScore > prevEffectiveGreenScoreRef.current
+
+  useEffect(() => {
+    prevEffectiveGreenScoreRef.current = effectiveGreenScore
+  }, [effectiveGreenScore])
+
+  const greenLevel = useMemo(() => {
+    const found = GREEN_LEVELS.find((l) => effectiveGreenScore >= l.min && effectiveGreenScore <= l.max)
+    return found || GREEN_LEVELS[0]
+  }, [GREEN_LEVELS, effectiveGreenScore])
+
+  // Keep Soil Vitality card in sync with quantitative activity impact.
+  useEffect(() => {
+    if (typeof vitalityBaseScore !== 'number' || !Number.isFinite(vitalityBaseScore)) return
+    setVitalityScore(applyActivityImpact(vitalityBaseScore))
+    const deltaRounded = Math.round(activityImpact?.soilHealthDelta || 0)
+    if (typeof vitalityBaseExplanation === 'string' && vitalityBaseExplanation.trim().length) {
+      setVitalityExplanation(
+        `${vitalityBaseExplanation}\n\n${t('vitality.activityImpactPrefix')} ${deltaRounded >= 0 ? '+' : ''}${deltaRounded}`
+      )
+    } else {
+      setVitalityExplanation('')
+    }
+  }, [vitalityBaseScore, vitalityBaseExplanation, activityImpact, t])
+
+  const profileFingerprint = useMemo(() => {
+    const fs = profile?.fieldSize?.value
+    const fu = profile?.fieldSize?.unit
+    const eq = profile?.equipment || {}
+    return [
+      profile?.soilType || 'loam',
+      typeof fs === 'number' ? fs : 'na',
+      fu || 'ha',
+      typeof profile?.workforce === 'number' ? profile.workforce : 'na',
+      `shovel:${eq.shovel ? 1 : 0}`,
+      `tractor:${eq.tractor ? 1 : 0}`,
+      `sprinkler:${eq.sprinkler ? 1 : 0}`,
+      `drip:${eq.dripIrrigation ? 1 : 0}`,
+    ].join('|')
+  }, [profile])
+
+  const systemRecommendationContextKey = useMemo(() => {
+    return `${profileFingerprint}|${activityImpact?.fingerprint || 'na'}`
+  }, [profileFingerprint, activityImpact])
+
+  // State change observer: when Activity/Profile is saved, we trigger
+  // dependent recommendation engines to recalculate immediately.
+  const [stateChangeSeq, setStateChangeSeq] = useState(0)
+  const lastStateChangePayloadRef = useRef(null)
+  const stateChangeDebounceTimerRef = useRef(null)
+  const lastHandledStateChangeContextKeyRef = useRef('')
+
+  function notifyStateChange(payload) {
+    lastStateChangePayloadRef.current = payload
+    setStateChangeSeq((prev) => prev + 1)
   }
 
   function saveProfileDraft() {
     uiLog.info('ui.modal.profile', { action: 'close', reason: 'save' })
+    const fieldSizeValue =
+      typeof fieldSizeDraft === 'string' && fieldSizeDraft.trim().length
+        ? Number(fieldSizeDraft)
+        : null
+    const workforceValue =
+      typeof workforceDraft === 'string' && workforceDraft.trim().length
+        ? Number(workforceDraft)
+        : null
+    const normalizedFieldSizeValue = Number.isFinite(fieldSizeValue) ? fieldSizeValue : null
+    const normalizedWorkforceValue = Number.isFinite(workforceValue) ? workforceValue : null
     const next = {
       soilType: soilTypeDraft,
       latitude:
         typeof coords?.latitude === 'number' ? coords.latitude : profile?.latitude ?? null,
       longitude:
         typeof coords?.longitude === 'number' ? coords.longitude : profile?.longitude ?? null,
+      fieldSize: { value: normalizedFieldSizeValue, unit: fieldSizeUnitDraft },
+      workforce: normalizedWorkforceValue,
+      equipment: equipmentDraft,
       updatedAt: new Date().toISOString(),
     }
     try {
@@ -755,6 +1235,7 @@ export default function SoilSenseApp() {
       storageLog.warn('storage.write.failed', { key: PROFILE_STORAGE_KEY, ...normalizeErrorForLog(err) })
     }
     setProfile(next)
+    notifyStateChange({ type: 'profileSaved', updatedAt: next?.updatedAt || Date.now() })
 
     if (typeof next.latitude === 'number' && typeof next.longitude === 'number') {
       setCoords((prev) => ({
@@ -769,11 +1250,38 @@ export default function SoilSenseApp() {
     setProfileOpen(false)
   }
 
-  function addActivity(activityTypeId) {
+  function addActivity(activity) {
+    const activityTypeId = typeof activity === 'string' ? activity : activity?.activityTypeId
+    if (!activityTypeId || typeof activityTypeId !== 'string') return
+    const def = ACTIVITY_TYPES.find((x) => x.id === activityTypeId)
+    const quantityRaw =
+      typeof activity === 'object' && activity
+        ? activity.quantity
+        : undefined
+    const quantity =
+      typeof quantityRaw === 'number'
+        ? quantityRaw
+        : typeof quantityRaw === 'string' && quantityRaw.trim().length
+          ? Number(quantityRaw)
+          : def?.defaultQuantity
+    const unit =
+      typeof activity === 'object' && activity
+        ? activity.unit
+        : undefined
+
+    const safeQuantity = Number.isFinite(quantity) ? Math.max(0, quantity) : null
+    const safeUnit = typeof unit === 'string' && unit.trim().length ? unit : def?.defaultUnit
+
+    const meta =
+      typeof activity === 'object' && activity && typeof activity.meta === 'object' ? activity.meta : {}
+
     const entry = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       activityTypeId,
       timestamp: new Date().toISOString(),
+      quantity: safeQuantity,
+      unit: safeUnit || undefined,
+      meta,
     }
     setActivityLog((prev) => {
       const next = [entry, ...prev].slice(0, 200)
@@ -791,6 +1299,19 @@ export default function SoilSenseApp() {
       return next
     })
     setActivityPickerOpen(false)
+    setActivityDraftTypeId('')
+    setActivityDraftQuantity('')
+    setActivityDraftUnit('')
+    setActivityDraftPesticideKind('chemical')
+    setActivityDraftFertilizerType('organic')
+    setActivityDraftError('')
+
+    notifyStateChange({
+      type: 'activitySaved',
+      activityTypeId,
+      timestamp: entry?.timestamp || Date.now(),
+      pesticideKind: meta?.pesticideKind || null,
+    })
   }
 
   const autoLocationRequestedRef = useRef(false)
@@ -945,8 +1466,8 @@ export default function SoilSenseApp() {
       lastAlertCoordsKeyRef.current = ''
       if (coords && geoStatus === 'success') {
         void (async () => {
-          await runAdvice()
-          await runSmartAlert()
+          const signals = await runSmartAlert()
+          await runAdvice({ weatherSignalsOverride: signals })
         })()
       }
 
@@ -977,21 +1498,55 @@ export default function SoilSenseApp() {
     requestLocation()
   }, [])
 
-  async function runAdvice() {
+  async function runAdvice({ weatherSignalsOverride, correlationId: correlationIdOverride } = {}) {
     if (!coords) return
-    const correlationId = ensureRunId()
+    const correlationId =
+      typeof correlationIdOverride === 'string' && correlationIdOverride.trim().length ? correlationIdOverride : ensureRunId()
     setAiStatus('loading')
     setAiAdvice('')
     setAiError('')
 
     try {
+      // Reuse existing weather signals if they are fresh; otherwise fetch.
+      let weatherSignals =
+        weatherSignalsOverride && typeof weatherSignalsOverride === 'object' ? weatherSignalsOverride : null
+
+      if (!weatherSignals) {
+        const now = Date.now()
+        const canReuse =
+          smartWeatherSignals && typeof smartWeatherSignals === 'object' && now - smartWeatherLastFetchAtRef.current < SMART_WEATHER_REFRESH_MS / 2
+        if (canReuse) {
+          weatherSignals = smartWeatherSignals
+        } else {
+          try {
+            weatherSignals = await fetchOpenMeteoSignals(coords.latitude, coords.longitude, { correlationId })
+          } catch (err) {
+            // Keep advisor UX stable even if weather signals fail.
+            uiLog.debug?.('ui.soilAdvice.weatherSignals.failed', {
+              message: err?.message ? String(err.message) : String(err),
+            })
+          }
+        }
+      }
+
+      const climateZoneHint = deriveClimateZoneHintFromWeatherSignals(weatherSignals || {})
+
       const text = await generateRegenerativeAdvice({
-        latitude: coords.latitude,
-        longitude: coords.longitude,
+        location: {
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          climateZone: climateZoneHint,
+        },
+        weatherSignals,
         lang,
         correlationId,
+        profile,
+        activityImpact,
+        soilHealthScore: typeof vitalityScore === 'number' ? vitalityScore : null,
       })
-      setAiAdvice(text)
+
+      const empatheticReminder = t('common.soilAdviceEmpatheticReminder')
+      setAiAdvice(`${empatheticReminder}\n\n${text}`)
       setAiStatus('success')
     } catch (err) {
       setAiStatus('error')
@@ -999,47 +1554,32 @@ export default function SoilSenseApp() {
     }
   }
 
-  async function runSmartAlert() {
+  async function runSmartAlert({ correlationId: correlationIdOverride } = {}) {
     if (!coords) return
-    const correlationId = ensureRunId()
+    const correlationId =
+      typeof correlationIdOverride === 'string' && correlationIdOverride.trim().length ? correlationIdOverride : ensureRunId()
     setSmartStatus('loading')
     setSmartError('')
-    setSmartAlert(null)
+    setSmartWeatherSignals(null)
     setVitalityStatus('loading')
     setVitalityError('')
     setVitalityScore(null)
     setVitalityExplanation('')
+    setVitalityBaseScore(null)
+    setVitalityBaseExplanation('')
+
+    let signalsForReturn = {}
 
     try {
       const signals = await fetchOpenMeteoSignals(coords.latitude, coords.longitude, { correlationId })
-      const fallback = buildSmartAlertFallback(
-        {
-          ...signals,
-        },
-        t
-      )
-
-      const alertJson = await generateSmartAlert({
-        latitude: coords.latitude,
-        longitude: coords.longitude,
-        weatherSummary: signals,
-        next48hHourly: signals?.next48hHourly,
-        lang,
-        correlationId,
-      })
+      signalsForReturn = signals && typeof signals === 'object' ? signals : {}
       const vitalityJson = await generateSoilVitalityScore({ weatherSummary: signals, lang, correlationId })
-
-      // If Gemini fails to parse, or returns parseError, fall back to deterministic advice.
-      if (alertJson?.parseError) {
-        setSmartAlert(fallback)
-      } else {
-        setSmartAlert(alertJson)
-      }
+      setSmartWeatherSignals(signals)
+      lastSmartWeatherFingerprintRef.current = weatherSignalsFingerprint(signals)
+      smartWeatherLastFetchAtRef.current = Date.now()
       setSmartStatus('success')
 
-      const effectiveAlert = alertJson?.parseError ? fallback : alertJson
       const frostDetected =
-        Boolean(effectiveAlert?.riskType === 'frost' || effectiveAlert?.isCritical) ||
         Boolean(
           typeof signals?.firstBelow2CInHours === 'number' ? signals.firstBelow2CInHours <= 48 : false
         ) ||
@@ -1051,27 +1591,39 @@ export default function SoilSenseApp() {
       uiLog.info(
         'ui.smartAlert.result',
         {
-          priority: effectiveAlert?.isCritical ? 'critical' : 'normal',
-          riskType: effectiveAlert?.riskType || 'unknown',
+          priority: frostDetected ? 'critical' : 'normal',
+          riskType: frostDetected ? 'frost' : 'weather',
           frostDetected,
-          usedAi: !alertJson?.parseError,
+          usedAi: false,
         },
         { correlationId }
       )
 
       if (vitalityJson?.parseError) {
         const scoreFallback = buildSoilVitalityScoreFallback(signals, lang)
+        setVitalityBaseScore(scoreFallback.soilHealthScore)
+        setVitalityBaseExplanation(scoreFallback.explanation)
         setVitalityScore(applyActivityImpact(scoreFallback.soilHealthScore))
+        const deltaRounded = Math.round(activityImpact?.soilHealthDelta || 0)
         setVitalityExplanation(
-          `${scoreFallback.explanation}\n\n${t('vitality.activityImpactPrefix')} +${activityImpactPoints}`
+          `${scoreFallback.explanation}\n\n${t('vitality.activityImpactPrefix')} ${
+            deltaRounded >= 0 ? '+' : ''
+          }${deltaRounded}`
         )
       } else {
         const score = vitalityJson?.soilHealthScore
         const explanation = vitalityJson?.explanation
-        if (typeof score === 'number') setVitalityScore(applyActivityImpact(score))
+        if (typeof score === 'number') {
+          setVitalityBaseScore(score)
+          setVitalityBaseExplanation(typeof explanation === 'string' ? explanation : '')
+          setVitalityScore(applyActivityImpact(score))
+        }
         if (typeof explanation === 'string' && explanation.trim()) {
+          const deltaRounded = Math.round(activityImpact?.soilHealthDelta || 0)
           setVitalityExplanation(
-            `${explanation}\n\n${t('vitality.activityImpactPrefix')} +${activityImpactPoints}`
+            `${explanation}\n\n${t('vitality.activityImpactPrefix')} ${
+              deltaRounded >= 0 ? '+' : ''
+            }${deltaRounded}`
           )
         }
       }
@@ -1082,7 +1634,7 @@ export default function SoilSenseApp() {
         {
           weatherHumidityBucket: signals?.humidityBucket || 'unknown',
           sunBucket: signals?.sunBucket || 'unknown',
-          activityImpactPoints,
+          activityImpactDelta: Math.round(activityImpact?.soilHealthDelta || 0),
           usedGeminiFallback: Boolean(vitalityJson?.parseError),
         },
         { correlationId }
@@ -1098,10 +1650,11 @@ export default function SoilSenseApp() {
         setDailyTasksStatus('loading')
         setDailyTasksError('')
 
-        const soilScoreForTasks =
+        const soilScoreBase =
           vitalityJson?.parseError
             ? buildSoilVitalityScoreFallback(signals, lang).soilHealthScore
             : vitalityJson?.soilHealthScore
+        const soilScoreForTasks = typeof soilScoreBase === 'number' ? applyActivityImpact(soilScoreBase) : soilScoreBase
 
         try {
           const dailyJson = await generateDailyTasks({
@@ -1109,6 +1662,8 @@ export default function SoilSenseApp() {
             soilHealthScore: soilScoreForTasks,
             lang,
             correlationId,
+            profile,
+            activityImpact,
           })
 
           const tasksCandidate = dailyJson?.tasks
@@ -1161,20 +1716,26 @@ export default function SoilSenseApp() {
         }
       }
     } catch (err) {
+      signalsForReturn = {}
       // Weather/Gemini failed: still keep UI stable and show deterministic advice from whatever we can.
-      const fallback = buildSmartAlertFallback({}, t)
-      setSmartAlert(fallback)
+      setSmartWeatherSignals({})
+      lastSmartWeatherFingerprintRef.current = weatherSignalsFingerprint({})
+      smartWeatherLastFetchAtRef.current = Date.now()
       setSmartStatus('success')
 
       // Score fallback is deterministic from whatever signals we have (may be empty).
       const scoreFallback = buildSoilVitalityScoreFallback({}, lang)
+      setVitalityBaseScore(scoreFallback.soilHealthScore)
+      setVitalityBaseExplanation(scoreFallback.explanation)
       setVitalityScore(applyActivityImpact(scoreFallback.soilHealthScore))
+      const deltaRounded = Math.round(activityImpact?.soilHealthDelta || 0)
       setVitalityExplanation(
-        `${scoreFallback.explanation}\n\n${t('vitality.activityImpactPrefix')} +${activityImpactPoints}`
+        `${scoreFallback.explanation}\n\n${t('vitality.activityImpactPrefix')} ${
+          deltaRounded >= 0 ? '+' : ''
+        }${deltaRounded}`
       )
       setVitalityStatus('success')
 
-      setSmartError(err?.message ? err.message : String(err))
       setVitalityError(err?.message ? err.message : String(err))
 
       if (dailyTasks.length === 0 && !dailyTasksGenerationInFlightRef.current) {
@@ -1199,6 +1760,122 @@ export default function SoilSenseApp() {
         }
       }
     }
+
+    return signalsForReturn
+  }
+
+  const refreshSmartWeatherSignalsOnly = useCallback(
+    async ({ correlationId } = {}) => {
+      if (!coords) return
+      if (smartWeatherFetchInFlightRef.current) return
+
+      const now = Date.now()
+      if (now - smartWeatherLastFetchAtRef.current < SMART_WEATHER_REFRESH_MS / 2) return
+
+      smartWeatherFetchInFlightRef.current = true
+      try {
+        const signals = await fetchOpenMeteoSignals(coords.latitude, coords.longitude, { correlationId })
+        const fp = weatherSignalsFingerprint(signals)
+        if (fp !== lastSmartWeatherFingerprintRef.current) {
+          lastSmartWeatherFingerprintRef.current = fp
+          setSmartWeatherSignals(signals)
+        }
+        smartWeatherLastFetchAtRef.current = now
+      } catch (err) {
+        // Keep the previous alert context if the background refresh fails.
+        uiLog.debug?.('ui.smartAlert.weatherRefresh.failed', {
+          message: err?.message ? String(err.message) : String(err),
+        })
+      } finally {
+        smartWeatherFetchInFlightRef.current = false
+      }
+    },
+    [coords, SMART_WEATHER_REFRESH_MS]
+  )
+
+  async function regenerateDailyTasksNow({ correlationId } = {}) {
+    if (dailyTasksGenerationInFlightRef.current) return
+    if (geoStatus !== 'success' || !coords) return
+
+    const signals = smartWeatherSignals && typeof smartWeatherSignals === 'object' ? smartWeatherSignals : {}
+
+    // `vitalityScore` already includes activity impact; fall back to a deterministic base score otherwise.
+    const soilScoreForTasks =
+      typeof vitalityScore === 'number'
+        ? vitalityScore
+        : applyActivityImpact(buildSoilVitalityScoreFallback(signals, lang).soilHealthScore)
+
+    dailyTasksGenerationInFlightRef.current = true
+    setDailyTasksStatus('loading')
+    setDailyTasksError('')
+
+    try {
+      const dailyJson = await generateDailyTasks({
+        weatherSummary: signals,
+        soilHealthScore: soilScoreForTasks,
+        lang,
+        correlationId,
+        profile,
+        activityImpact,
+      })
+
+      const tasksCandidate = dailyJson?.tasks
+      const tasks =
+        Array.isArray(tasksCandidate) && tasksCandidate.length === 3
+          ? tasksCandidate
+          : buildDailyTasksFallback(signals, t)
+
+      const taskSource = Array.isArray(tasksCandidate) && tasksCandidate.length === 3 ? 'ai' : 'fallback'
+      setDailyTasks(tasks)
+      setDailyTasksStatus('success')
+
+      uiLog.info(
+        'ui.dailyTasks.persisted',
+        { dayKey: dailyTasksDayKey, generatedCount: tasks.length, source: taskSource },
+        { correlationId }
+      )
+
+      try {
+        const payload = JSON.stringify(tasks)
+        localStorage.setItem(`soilsense.dailyTasks.${dailyTasksDayKey}`, payload)
+        storageLog.info('storage.write', {
+          key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+          bytes: payload.length,
+        })
+      } catch (err) {
+        storageLog.warn('storage.write.failed', {
+          key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+          ...normalizeErrorForLog(err),
+        })
+      }
+    } catch {
+      const tasks = buildDailyTasksFallback(signals, t)
+      setDailyTasks(tasks)
+      setDailyTasksStatus('success')
+      setDailyTasksError('')
+
+      uiLog.info(
+        'ui.dailyTasks.persisted',
+        { dayKey: dailyTasksDayKey, generatedCount: tasks.length, source: 'errorFallback' },
+        { correlationId }
+      )
+
+      try {
+        const payload = JSON.stringify(tasks)
+        localStorage.setItem(`soilsense.dailyTasks.${dailyTasksDayKey}`, payload)
+        storageLog.info('storage.write', {
+          key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+          bytes: payload.length,
+        })
+      } catch (err2) {
+        storageLog.warn('storage.write.failed', {
+          key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+          ...normalizeErrorForLog(err2),
+        })
+      }
+    } finally {
+      dailyTasksGenerationInFlightRef.current = false
+    }
   }
 
   function onUseEnvGeminiKey() {
@@ -1211,8 +1888,8 @@ export default function SoilSenseApp() {
     lastAlertCoordsKeyRef.current = ''
     if (coords && geoStatus === 'success') {
       void (async () => {
-        await runAdvice()
-        await runSmartAlert()
+        const signals = await runSmartAlert()
+        await runAdvice({ weatherSignalsOverride: signals })
       })()
     }
   }
@@ -1227,8 +1904,8 @@ export default function SoilSenseApp() {
     lastAdviceCoordsKeyRef.current = key
     lastAlertCoordsKeyRef.current = key
     void (async () => {
-      await runAdvice()
-      await runSmartAlert()
+      const signals = await runSmartAlert()
+      await runAdvice({ weatherSignalsOverride: signals })
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coords, geoStatus])
@@ -1243,11 +1920,61 @@ export default function SoilSenseApp() {
     lastAlertCoordsKeyRef.current = ''
     forceDailyTasksRefreshRef.current = true
     void (async () => {
-      await runAdvice()
-      await runSmartAlert()
+      const signals = await runSmartAlert({ correlationId })
+      await runAdvice({ weatherSignalsOverride: signals, correlationId })
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lang])
+
+  // Observer/Trigger pattern: when an Activity/Profile is saved, refresh dependent engines.
+  // This runs asynchronously and coalesces rapid updates.
+  useEffect(() => {
+    if (stateChangeSeq === 0) return
+    if (geoStatus !== 'success') return
+    if (!coords) return
+    if (!systemRecommendationContextKey) return
+
+    if (stateChangeDebounceTimerRef.current) clearTimeout(stateChangeDebounceTimerRef.current)
+
+    const capturedContextKey = systemRecommendationContextKey
+    const timer = setTimeout(() => {
+      if (lastHandledStateChangeContextKeyRef.current === capturedContextKey) return
+      lastHandledStateChangeContextKeyRef.current = capturedContextKey
+
+      const correlationId = generateRunId()
+      void (async () => {
+        // Ensure daily tasks are regenerated with the new activity-driven soil health signal.
+        forceDailyTasksRefreshRef.current = true
+
+        try {
+          const signals = await runSmartAlert({ correlationId })
+          await runAdvice({ weatherSignalsOverride: signals, correlationId })
+        } catch (err) {
+          // If alert refresh fails, still try to refresh the advisor text.
+          void runAdvice({ correlationId })
+        }
+      })()
+    }, 50)
+
+    stateChangeDebounceTimerRef.current = timer
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateChangeSeq, geoStatus, coords, systemRecommendationContextKey])
+
+  // Smart Alert: keep weather signals “alive” while the user is on the dashboard.
+  useEffect(() => {
+    if (activeTab !== 'dashboard') return
+    if (geoStatus !== 'success') return
+    if (!coords) return
+
+    const tick = () => {
+      void refreshSmartWeatherSignalsOnly({ correlationId: generateRunId() })
+    }
+
+    const id = setInterval(tick, SMART_WEATHER_REFRESH_MS)
+    tick()
+    return () => clearInterval(id)
+  }, [activeTab, geoStatus, coords, refreshSmartWeatherSignalsOnly, SMART_WEATHER_REFRESH_MS])
 
   // Knowledge Hub: generate once when we first open the Guide tab.
   useEffect(() => {
@@ -1361,9 +2088,20 @@ export default function SoilSenseApp() {
 
                 <div className="green-badge-row" aria-label="Sustainability level">
                   <div className="green-score-pill">
-                    <BadgeCheck size={16} strokeWidth={2.2} />
-                    <span className="green-score-label">{t('dashboard.greenScore')}</span>
-                    <span className="green-score-value">{greenScore}</span>
+                    <div className="green-score-progress-track" aria-hidden="true">
+                      <div
+                        className="green-score-progress-fill"
+                        style={{
+                          width: `${effectiveGreenScore}%`,
+                          transition: shouldAnimateGreenScoreFill ? 'width 800ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none',
+                        }}
+                      />
+                    </div>
+                    <div className="green-score-pill-content">
+                      <BadgeCheck size={16} strokeWidth={2.2} />
+                      <span className="green-score-label">{t('dashboard.greenScore')}</span>
+                      <span className="green-score-value">{effectiveGreenScore}</span>
+                    </div>
                   </div>
                   <div className="green-level-pill">
                     <span className="muted" style={{ opacity: 0.95, fontSize: 12 }}>
@@ -1459,24 +2197,23 @@ export default function SoilSenseApp() {
                             : 'smart-headline'
                         }
                       >
-                        {smartAlert.headline || '—'}
+                        {smartAlert.status || '—'}
                       </p>
-                      {smartAlert.recommendedAction ? (
-                        <p className="smart-action">{smartAlert.recommendedAction}</p>
+                      {smartAlert.reason ? (
+                        <p className="muted smart-details smart-reason">{smartAlert.reason}</p>
                       ) : null}
-                      {smartAlert.actionPlan ? (
-                        <p className="smart-action">
-                          <strong>{t('common.actionPlan')}</strong> {smartAlert.actionPlan}
-                        </p>
-                      ) : null}
-                      {smartAlert.details ? (
-                        <p className="muted smart-details">{smartAlert.details}</p>
+                      {Array.isArray(smartAlert.instruction) && smartAlert.instruction.length ? (
+                        <ul className="smart-instruction">
+                          {smartAlert.instruction.slice(0, 4).map((step, idx) => (
+                            <li key={`${idx}-${step}`}>{step}</li>
+                          ))}
+                        </ul>
                       ) : null}
                       {Array.isArray(smartAlert.tags) && smartAlert.tags.length ? (
                         <div className="chips chips-tight">
-                          {smartAlert.tags.slice(0, 4).map((t) => (
-                            <span key={t} className="chip">
-                              {t}
+                          {smartAlert.tags.slice(0, 4).map((tag) => (
+                            <span key={tag} className="chip">
+                              {tag}
                             </span>
                           ))}
                         </div>
@@ -1577,17 +2314,140 @@ export default function SoilSenseApp() {
                   </button>
 
                   {activityPickerOpen ? (
-                    <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
-                      {ACTIVITY_TYPES.map((act) => (
-                        <button
-                          key={act.id}
-                          type="button"
-                          className="btn btn-ghost"
-                          onClick={() => addActivity(act.id)}
-                        >
-                          {t(`activity.types.${act.id}`)}
-                        </button>
-                      ))}
+                    <div style={{ marginTop: 12, display: 'grid', gap: 10 }}>
+                      {activityDraftTypeId ? (
+                        <div style={{ display: 'grid', gap: 10 }}>
+                          <div className="muted" style={{ fontWeight: 800 }}>
+                            {t(`activity.types.${activityDraftTypeId}`)}
+                          </div>
+
+                          <label className="field" style={{ margin: 0 }}>
+                            <span className="field-label">{t('activity.quantityLabel')}</span>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <input
+                                className="field-input"
+                                value={activityDraftQuantity}
+                                inputMode="decimal"
+                                onChange={(e) => setActivityDraftQuantity(e.target.value)}
+                                placeholder="e.g., 10"
+                                style={{ flex: 1 }}
+                              />
+                              <select
+                                className="field-input"
+                                value={activityDraftUnit}
+                                onChange={(e) => setActivityDraftUnit(e.target.value)}
+                                style={{ width: 150 }}
+                              >
+                                {(ACTIVITY_TYPES.find((x) => x.id === activityDraftTypeId)?.id === 'pesticide-application'
+                                  ? ['liters', 'kg', 'g']
+                                  : ACTIVITY_TYPES.find((x) => x.id === activityDraftTypeId)?.id ===
+                                      'added-compost' ||
+                                    ACTIVITY_TYPES.find((x) => x.id === activityDraftTypeId)?.id ===
+                                      'used-organic-fertilizer' ||
+                                    ACTIVITY_TYPES.find((x) => x.id === activityDraftTypeId)?.id === 'fertilizer-application'
+                                    ? ['kg', 'bags']
+                                    : ['liters', 'kg']
+                                ).map((u) => (
+                                  <option key={u} value={u}>
+                                    {t(`activity.units.${u}`)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </label>
+
+                          {activityDraftTypeId === 'pesticide-application' ? (
+                            <label className="field" style={{ margin: 0 }}>
+                              <span className="field-label">{t('activity.pesticideKindLabel')}</span>
+                              <select
+                                className="field-input"
+                                value={activityDraftPesticideKind}
+                                onChange={(e) => setActivityDraftPesticideKind(e.target.value)}
+                              >
+                                <option value="chemical">{t('activity.pesticideKinds.chemical')}</option>
+                                <option value="biological">{t('activity.pesticideKinds.biological')}</option>
+                              </select>
+                            </label>
+                          ) : null}
+
+                          {activityDraftTypeId === 'fertilizer-application' ? (
+                            <label className="field" style={{ margin: 0 }}>
+                              <span className="field-label">{t('activity.fertilizerTypeLabel')}</span>
+                              <select
+                                className="field-input"
+                                value={activityDraftFertilizerType}
+                                onChange={(e) => setActivityDraftFertilizerType(e.target.value)}
+                              >
+                                <option value="organic">{t('activity.fertilizerTypes.organic')}</option>
+                                <option value="chemical">{t('activity.fertilizerTypes.chemical')}</option>
+                              </select>
+                            </label>
+                          ) : null}
+
+                          {activityDraftError ? <pre className="error-pre">{activityDraftError}</pre> : null}
+
+                          <div className="key-actions">
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              onClick={() => {
+                                const quantity = Number(activityDraftQuantity)
+                                if (!Number.isFinite(quantity) || quantity <= 0) {
+                                  setActivityDraftError(t('activity.quantityLabel') + ': invalid value')
+                                  return
+                                }
+                                const meta = {}
+                                if (activityDraftTypeId === 'pesticide-application') {
+                                  meta.pesticideKind = activityDraftPesticideKind
+                                }
+                                if (activityDraftTypeId === 'fertilizer-application') {
+                                  meta.fertilizerType = activityDraftFertilizerType
+                                }
+                                addActivity({
+                                  activityTypeId: activityDraftTypeId,
+                                  quantity,
+                                  unit: activityDraftUnit,
+                                  meta,
+                                })
+                              }}
+                            >
+                              {t('activity.addActivitySave')}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost"
+                              onClick={() => {
+                                setActivityDraftTypeId('')
+                                setActivityDraftQuantity('')
+                                setActivityDraftUnit('')
+                                setActivityDraftError('')
+                              }}
+                            >
+                              {t('activity.addActivityCancel')}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'grid', gap: 8 }}>
+                          {ACTIVITY_TYPES.map((act) => (
+                            <button
+                              key={act.id}
+                              type="button"
+                              className="btn btn-ghost"
+                              onClick={() => {
+                                setActivityDraftTypeId(act.id)
+                                setActivityDraftQuantity(String(act.defaultQuantity ?? 1))
+                                setActivityDraftUnit(act.defaultUnit ?? '')
+                                setActivityDraftPesticideKind('chemical')
+                                setActivityDraftFertilizerType('organic')
+                                setActivityDraftError('')
+                              }}
+                            >
+                              {t(`activity.types.${act.id}`)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ) : null}
 
@@ -1597,7 +2457,15 @@ export default function SoilSenseApp() {
                       <ul className="ordered-list">
                         {recentActivities.slice(0, 7).map((item) => (
                           <li key={item.id}>
-                            {t(`activity.types.${item.activityTypeId}`)} -{' '}
+                            {t(`activity.types.${item.activityTypeId}`)}
+                            {typeof item.quantity === 'number' ? (
+                              <>
+                                {' '}
+                                - {item.quantity}
+                                {item.unit ? ` ${item.unit}` : null}
+                              </>
+                            ) : null}
+                            {' '}
                             {new Date(item.timestamp).toLocaleDateString()}
                           </li>
                         ))}
@@ -1621,17 +2489,26 @@ export default function SoilSenseApp() {
                 {geoStatus !== 'success' ? (
                   <div className="card-body">
                     <p className="muted">{t('common.enableLocationForAdvice')}</p>
+                    <p className="muted" style={{ marginTop: 10, lineHeight: 1.4 }}>
+                      {t('common.soilAdviceEmpatheticReminder')}
+                    </p>
                   </div>
                 ) : null}
 
                 {aiStatus === 'loading' ? (
                   <div className="card-body">
                     <p className="muted">{t('common.generatingNextStepPlan')}</p>
+                    <p className="muted" style={{ marginTop: 10, lineHeight: 1.4 }}>
+                      {t('common.soilAdviceEmpatheticReminder')}
+                    </p>
                   </div>
                 ) : null}
 
                 {aiStatus === 'error' ? (
                   <div className="card-body">
+                    <p className="muted" style={{ marginBottom: 10, lineHeight: 1.4 }}>
+                      {t('common.soilAdviceEmpatheticReminder')}
+                    </p>
                     <p className="muted">{t('common.couldNotGenerateAdvice')}</p>
                     <pre className="error-pre">{aiError}</pre>
                     <button
@@ -1643,6 +2520,14 @@ export default function SoilSenseApp() {
                     >
                       {t('common.retryAdvice')}
                     </button>
+                  </div>
+                ) : null}
+
+                {geoStatus === 'success' && aiStatus === 'idle' ? (
+                  <div className="card-body">
+                    <p className="muted" style={{ lineHeight: 1.4 }}>
+                      {t('common.soilAdviceEmpatheticReminder')}
+                    </p>
                   </div>
                 ) : null}
 
@@ -1717,6 +2602,19 @@ export default function SoilSenseApp() {
               </header>
               <section className="card">
                 <div className="card-body">
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 0, marginBottom: 12 }}>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-inline"
+                      onClick={() => setCompostGuideOpen((v) => !v)}
+                    >
+                      <BookOpen size={16} strokeWidth={2.2} />
+                      {t('compostGuide.howToCompostButton')}
+                    </button>
+                  </div>
+
+                  {compostGuideOpen ? <CompostGuide compact /> : null}
+
                   <CompostWizard
                     onRecipeGenerated={() => addGreenPoints(10)}
                     lang={lang}
@@ -1734,6 +2632,16 @@ export default function SoilSenseApp() {
               </header>
               <section className="card">
                 <div className="card-body">
+                  <div className="guide-insights-scroll">
+                    <EducationalGuide
+                      coords={coords || null}
+                      climateZoneHint={deriveClimateZoneHintFromWeatherSignals(
+                        smartWeatherSignals && typeof smartWeatherSignals === 'object' ? smartWeatherSignals : {}
+                      )}
+                      activityImpact={activityImpact || null}
+                    />
+                  </div>
+
                   {hubStatus === 'idle' || hubStatus === 'loading' ? (
                     <p className="muted">
                       {hubStatus === 'loading'
@@ -1782,7 +2690,15 @@ export default function SoilSenseApp() {
           ) : null}
 
           {activeTab === 'scan' ? (
-            <PlantScanner lang={lang} />
+            <PlantScanner
+              lang={lang}
+              onScanComplete={(json) => {
+                setPlantScanResult(json)
+                uiLog.info('ui.smartAlert.biological.scanComplete', {
+                  healthStatus: json?.healthStatus,
+                })
+              }}
+            />
           ) : null}
         </div>
 
@@ -1820,6 +2736,68 @@ export default function SoilSenseApp() {
                     <option value="silty">{t('profile.soilTypes.silty')}</option>
                   </select>
                 </label>
+
+                <label className="field" style={{ marginTop: 12 }}>
+                  <span className="field-label">{t('profile.fieldSizeLabel')}</span>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input
+                      className="field-input"
+                      value={fieldSizeDraft}
+                      inputMode="decimal"
+                      onChange={(e) => setFieldSizeDraft(e.target.value)}
+                      placeholder="e.g., 1000"
+                      style={{ flex: 1 }}
+                    />
+                    <select
+                      className="field-input"
+                      value={fieldSizeUnitDraft}
+                      onChange={(e) => setFieldSizeUnitDraft(e.target.value)}
+                      style={{ width: 150 }}
+                    >
+                      <option value="sqm">{t('profile.fieldSizeUnits.sqm')}</option>
+                      <option value="ha">{t('profile.fieldSizeUnits.ha')}</option>
+                    </select>
+                  </div>
+                </label>
+
+                <label className="field" style={{ marginTop: 12 }}>
+                  <span className="field-label">{t('profile.workforceLabel')}</span>
+                  <input
+                    className="field-input"
+                    value={workforceDraft}
+                    inputMode="numeric"
+                    onChange={(e) => setWorkforceDraft(e.target.value)}
+                    placeholder="e.g., 1"
+                  />
+                </label>
+
+                <div style={{ marginTop: 12 }}>
+                  <p className="field-label" style={{ marginBottom: 6 }}>
+                    {t('profile.inventoryLabel')}
+                  </p>
+                  <div style={{ display: 'grid', gap: 6 }}>
+                    {[
+                      { key: 'shovel', label: t('profile.equipmentTools.shovel') },
+                      { key: 'tractor', label: t('profile.equipmentTools.tractor') },
+                      { key: 'sprinkler', label: t('profile.equipmentTools.sprinkler') },
+                      { key: 'dripIrrigation', label: t('profile.equipmentTools.dripIrrigation') },
+                    ].map((item) => (
+                      <label key={item.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(equipmentDraft?.[item.key])}
+                          onChange={(e) =>
+                            setEquipmentDraft((prev) => ({
+                              ...(prev || { shovel: false, tractor: false, sprinkler: false, dripIrrigation: false }),
+                              [item.key]: e.target.checked,
+                            }))
+                          }
+                        />
+                        <span style={{ fontWeight: 800 }}>{item.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
 
                 <p className="muted" style={{ marginTop: 10 }}>
                   {typeof coords?.latitude === 'number' && typeof coords?.longitude === 'number'
