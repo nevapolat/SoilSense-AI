@@ -6,6 +6,7 @@ import { getAllLangs } from './translations'
 import { getLanguageNativeLabel } from './languages'
 import { I18nContext } from './I18nContext'
 import { createLogger } from '../lib/logger'
+import { setGlobalPreferredLanguage } from '../lib/llm.js'
 
 const i18nLog = createLogger('i18n')
 
@@ -91,6 +92,8 @@ export default function I18nProvider({ children } = {}) {
     } catch (err) {
       i18nLog.warn('i18n.persistLangFailed', { message: err?.message ? String(err.message) : String(err) })
     }
+    // Keep model communication layer in strict sync with UI locale.
+    setGlobalPreferredLanguage(lang)
   }, [lang])
 
   const setLang = useCallback(

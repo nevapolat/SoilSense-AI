@@ -74,27 +74,55 @@ function textFromMessage(msg) {
     .join('')
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 async function generateClaudeText(prompt, { apiKeyOverride } = {}) {
   const client = new Anthropic({
     apiKey: requireAnthropicKey(apiKeyOverride),
     dangerouslyAllowBrowser: true,
   })
-  try {
-    const msg = await client.messages.create({
-      model: getResolvedClaudeModelName(),
-      max_tokens: 8192,
-      messages: [{ role: 'user', content: prompt }],
-    })
-    return textFromMessage(msg)
-  } catch (err) {
-    const msg = err?.message ? err.message : String(err)
-    if (/401|403|invalid|authentication|api[_ ]?key/i.test(msg)) {
-      throw new Error(
-        'Anthropic API key is not usable. Set `VITE_ANTHROPIC_API_KEY` in frontend/.env or paste a key in the Dashboard testing panel.'
-      )
+
+  const maxAttempts = 3
+  let lastErr = null
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const msg = await client.messages.create({
+        model: getResolvedClaudeModelName(),
+        max_tokens: 8192,
+        messages: [{ role: 'user', content: prompt }],
+      })
+      return textFromMessage(msg)
+    } catch (err) {
+      lastErr = err
+      const msg = err?.message ? err.message : String(err)
+      if (/401|403|invalid|authentication|api[_ ]?key/i.test(msg)) {
+        throw new Error(
+          'Anthropic API key is not usable. Set `VITE_ANTHROPIC_API_KEY` in frontend/.env or paste a key in the Dashboard testing panel.'
+        )
+      }
+
+      // Handle temporary overload/rate spikes with bounded retries.
+      const isTransient =
+        /529|overloaded|overload|rate[_ -]?limit|temporar|try again/i.test(msg) ||
+        Number(err?.status) === 529 ||
+        Number(err?.status) === 429
+      const shouldRetry = isTransient && attempt < maxAttempts
+      if (shouldRetry) {
+        await sleep(400 * attempt)
+        continue
+      }
+
+      if (isTransient) {
+        throw new Error(
+          'AI service is temporarily overloaded. Please retry in a few seconds.'
+        )
+      }
+      throw err
     }
-    throw err
   }
+  throw lastErr || new Error('Claude request failed.')
 }
 
 // Main AI entry point for SoilSense.
@@ -771,6 +799,55 @@ Rules:
     return { parseError: true, rawText: text }
   } catch (err) {
     claudeLog.error('claude.dailyTasks.error', normalizeErrorForLog(err), {
+      correlationId,
+      durationMs: performance.now() - t0,
+    })
+    throw err
+  }
+}
+
+export async function generateLocationEnvironmentalAnalysis({
+  address,
+  latitude,
+  longitude,
+  weatherSummary,
+  lang,
+  correlationId,
+} = {}) {
+  const t0 = performance.now()
+  const model = getResolvedClaudeModelName()
+  claudeLog.info('claude.locationIntel.start', { model }, { correlationId })
+  const locationLine = formatCoords(latitude, longitude)
+  const prompt = `${REG_AGRI_EXPERT_PERSONA}
+${buildLanguageInstruction(lang)}
+Analyze this farming location and return practical environmental intelligence.
+
+Location:
+- Address: ${address || 'unknown'}
+- ${locationLine}
+
+Weather summary:
+${JSON.stringify(weatherSummary || {})}
+
+Return ONLY strict JSON:
+{
+  "climateZone": string,
+  "generalSoilCharacteristics": string[],
+  "cropSuitability": string[],
+  "regionalSummary": string
+}
+
+Rules:
+- Keep "generalSoilCharacteristics" to 3-5 concise items.
+- Keep "cropSuitability" to 4-8 region-appropriate crop names.
+- "regionalSummary" should be 1 short sentence for farmers.`
+  try {
+    const text = await generateClaudeText(prompt)
+    const json = extractJson(text)
+    if (json) return json
+    return { parseError: true, rawText: text }
+  } catch (err) {
+    claudeLog.error('claude.locationIntel.error', normalizeErrorForLog(err), {
       correlationId,
       durationMs: performance.now() - t0,
     })

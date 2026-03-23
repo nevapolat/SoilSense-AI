@@ -1,12 +1,13 @@
 import './App.css'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BadgeCheck, BookOpen, Leaf, TreePine, Camera, Globe2, Sun, Droplet } from 'lucide-react'
+import { BadgeCheck, BookOpen, Leaf, TreePine, Camera, Globe2, Sun, Droplet, Map } from 'lucide-react'
 import {
   generateKnowledgeHub,
   generateRegenerativeAdvice,
   generateSoilVitalityScore,
   buildSoilVitalityScoreFallback,
   generateDailyTasks,
+  generateLocationEnvironmentalAnalysis,
   clearRuntimeGeminiApiKey,
   getRuntimeGeminiApiKey,
   setRuntimeGeminiApiKey,
@@ -20,6 +21,8 @@ import DiagnosticsPanel from './components/DiagnosticsPanel'
 import { useI18n } from './i18n/useI18n'
 import { bucketAccuracyMeters, createLogger, generateRunId, normalizeErrorForLog } from './lib/logger'
 import EducationalGuide from './components/EducationalGuide'
+import FieldPlanner from './components/FieldPlanner'
+import { buildCropDrivenDailyTasks, buildFieldPlan, getAvailableCrops } from './lib/fieldPlanner'
 
 const storageLog = createLogger('storage')
 const geoLog = createLogger('geo')
@@ -39,6 +42,7 @@ function toFixedOrDash(n, digits) {
 
 const PROFILE_STORAGE_KEY = 'soilsense.profile'
 const ACTIVITY_LOG_STORAGE_KEY = 'soilsense.activityLog'
+const GREEN_POINT_EVENTS_KEY = 'soilsense.greenPointEvents'
 
 const ACTIVITY_TYPES = [
   { id: 'added-eggshells', category: 'organic-matter', defaultQuantity: 1, defaultUnit: 'kg' },
@@ -83,6 +87,7 @@ function normalizeProfile(profile) {
   const workforce = typeof p.workforce === 'number' && Number.isFinite(p.workforce) ? p.workforce : null
 
   const equipmentRaw = p.equipment && typeof p.equipment === 'object' ? p.equipment : {}
+  const currentCrops = Array.isArray(p.currentCrops) ? p.currentCrops.filter((x) => typeof x === 'string') : []
   const equipment = {
     shovel: Boolean(equipmentRaw.shovel),
     tractor: Boolean(equipmentRaw.tractor),
@@ -96,6 +101,7 @@ function normalizeProfile(profile) {
     longitude,
     fieldSize: { value: fieldSizeValue, unit: fieldSizeUnit },
     workforce,
+    currentCrops,
     equipment,
     updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : undefined,
   }
@@ -433,7 +439,7 @@ async function fetchOpenMeteoSignals(latitude, longitude, { correlationId } = {}
     latitude
   )}&longitude=${encodeURIComponent(
     longitude
-  )}&current=temperature_2m,relative_humidity_2m,dew_point_2m,precipitation,wind_speed_10m,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&hourly=temperature_2m,dew_point_2m&forecast_hours=48&timezone=auto`
+  )}&current=temperature_2m,relative_humidity_2m,dew_point_2m,precipitation,wind_speed_10m,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&hourly=temperature_2m,dew_point_2m&forecast_hours=48&past_days=1&forecast_days=2&timezone=auto`
 
   weatherLog.info('weather.openMeteo.request.start', { correlationId })
   let res
@@ -481,6 +487,10 @@ async function fetchOpenMeteoSignals(latitude, longitude, { correlationId } = {}
   const precipitationSumMm =
     Array.isArray(daily.precipitation_sum) && daily.precipitation_sum.length
       ? daily.precipitation_sum[0]
+      : null
+  const precipitationYesterdayMm =
+    Array.isArray(daily.precipitation_sum) && daily.precipitation_sum.length > 1
+      ? daily.precipitation_sum[1]
       : null
 
   const hourly = data?.hourly || {}
@@ -561,6 +571,7 @@ async function fetchOpenMeteoSignals(latitude, longitude, { correlationId } = {}
     tempMaxC,
     tempMinC,
     precipitationSumMm,
+    precipitationYesterdayMm,
     weatherCode: current.weather_code ?? null,
     frostThresholdC,
     next48hMinTempC,
@@ -632,6 +643,7 @@ export default function SoilSenseApp() {
   const TABS = useMemo(
     () => [
       { id: 'dashboard', label: tl('tabs.dashboard', 'Dashboard'), icon: TreePine },
+      { id: 'planner', label: tl('tabs.planner', 'Planner'), icon: Map },
       { id: 'compost', label: tl('tabs.compost', 'Compost'), icon: Leaf },
       { id: 'guide', label: tl('tabs.guide', 'Guide'), icon: BookOpen },
       { id: 'scan', label: tl('tabs.scan', 'Scan'), icon: Camera },
@@ -663,6 +675,7 @@ export default function SoilSenseApp() {
   const [smartStatus, setSmartStatus] = useState('idle') // idle|loading|success|error
   const [smartError, setSmartError] = useState('')
   const [smartWeatherSignals, setSmartWeatherSignals] = useState(null)
+  const [locationIntel, setLocationIntel] = useState(null)
   const [plantScanResult, setPlantScanResult] = useState(null)
   const lastAlertCoordsKeyRef = useRef('')
   const lastSmartWeatherFingerprintRef = useRef('')
@@ -698,6 +711,19 @@ export default function SoilSenseApp() {
       return 0
     }
   })
+  const awardedPointEventsRef = useRef(new Set())
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(GREEN_POINT_EVENTS_KEY)
+      const arr = raw ? JSON.parse(raw) : []
+      if (Array.isArray(arr)) {
+        awardedPointEventsRef.current = new Set(arr.filter((x) => typeof x === 'string'))
+      }
+    } catch {
+      awardedPointEventsRef.current = new Set()
+    }
+  }, [])
 
   function addGreenPoints(points) {
     const delta = Number(points)
@@ -713,6 +739,25 @@ export default function SoilSenseApp() {
       }
       return next
     })
+  }
+
+  function addGreenPointsOnce(eventKey, points) {
+    const key = typeof eventKey === 'string' ? eventKey.trim() : ''
+    if (!key) {
+      addGreenPoints(points)
+      return
+    }
+    if (awardedPointEventsRef.current.has(key)) return
+    awardedPointEventsRef.current.add(key)
+    try {
+      localStorage.setItem(
+        GREEN_POINT_EVENTS_KEY,
+        JSON.stringify(Array.from(awardedPointEventsRef.current))
+      )
+    } catch {
+      // ignore persistence failure; scoring still remains guarded in-memory
+    }
+    addGreenPoints(points)
   }
 
   // Task 11 (Daily tasks): generated once per day.
@@ -749,6 +794,7 @@ export default function SoilSenseApp() {
     const p = normalizeProfile(loadProfile())
     return p.equipment || { shovel: false, tractor: false, sprinkler: false, dripIrrigation: false }
   })
+  const [currentCropsDraft, setCurrentCropsDraft] = useState(() => normalizeProfile(loadProfile()).currentCrops || [])
   const [activityLog, setActivityLog] = useState(() => loadActivityLog())
   const [activityPickerOpen, setActivityPickerOpen] = useState(false)
   const [activityDraftTypeId, setActivityDraftTypeId] = useState('')
@@ -757,8 +803,10 @@ export default function SoilSenseApp() {
   const [activityDraftPesticideKind, setActivityDraftPesticideKind] = useState('chemical')
   const [activityDraftFertilizerType, setActivityDraftFertilizerType] = useState('organic')
   const [activityDraftError, setActivityDraftError] = useState('')
+  const [profileSaveNotice, setProfileSaveNotice] = useState('')
 
   const [compostGuideOpen, setCompostGuideOpen] = useState(false)
+  const availableCrops = useMemo(() => getAvailableCrops(), [])
 
   const smartAlert = useMemo(() => {
     const signals = smartWeatherSignals && typeof smartWeatherSignals === 'object' ? smartWeatherSignals : {}
@@ -767,6 +815,22 @@ export default function SoilSenseApp() {
 
     // Highest priority: frost critical.
     if (base.isCritical || base.riskType === 'frost') return base
+
+    const selectedCropIds = Array.isArray(profile?.currentCrops) ? profile.currentCrops : []
+    const selectedCrops = selectedCropIds.map((id) => ({ id, name: t(`crops.${id}`) }))
+    if (selectedCrops.length) {
+      const cropNames = selectedCrops.map((x) => x.name).join(', ')
+      return {
+        ...base,
+        status: `${cropNames}: ${base.status || ''}`.trim(),
+        reason: `${t('fieldPlanner.cropAlignedAlert')} ${cropNames}.`,
+        instruction: [
+          t('fieldPlanner.dosageTitle'),
+          t('fieldPlanner.spacingTitle'),
+        ].filter(Boolean),
+        tags: [cropNames, ...(base.tags || [])].slice(0, 4),
+      }
+    }
 
     // Biological override: plant scan suggests stress/sickness.
     const healthStatus = plantScanResult?.healthStatus
@@ -1135,6 +1199,20 @@ export default function SoilSenseApp() {
     }
   }, [activityLog, profile, recentActivities])
 
+  const fieldPlan = useMemo(
+    () =>
+      buildFieldPlan({
+        profile,
+        climateZoneHint:
+          locationIntel?.climateZone ||
+          deriveClimateZoneHintFromWeatherSignals(
+            smartWeatherSignals && typeof smartWeatherSignals === 'object' ? smartWeatherSignals : {}
+          ),
+        activityImpact,
+      }),
+    [profile, smartWeatherSignals, activityImpact, locationIntel]
+  )
+
   function applyActivityImpact(baseScore) {
     if (typeof baseScore !== 'number' || !Number.isFinite(baseScore)) return baseScore
     const adjusted = Math.round(baseScore + activityImpact.soilHealthDelta)
@@ -1224,6 +1302,7 @@ export default function SoilSenseApp() {
         typeof coords?.longitude === 'number' ? coords.longitude : profile?.longitude ?? null,
       fieldSize: { value: normalizedFieldSizeValue, unit: fieldSizeUnitDraft },
       workforce: normalizedWorkforceValue,
+      currentCrops: currentCropsDraft,
       equipment: equipmentDraft,
       updatedAt: new Date().toISOString(),
     }
@@ -1236,6 +1315,7 @@ export default function SoilSenseApp() {
     }
     setProfile(next)
     notifyStateChange({ type: 'profileSaved', updatedAt: next?.updatedAt || Date.now() })
+    setProfileSaveNotice(t('profile.savedNotice'))
 
     if (typeof next.latitude === 'number' && typeof next.longitude === 'number') {
       setCoords((prev) => ({
@@ -1284,6 +1364,19 @@ export default function SoilSenseApp() {
       meta,
     }
     setActivityLog((prev) => {
+      // Guard against accidental duplicate submits (double click / rapid taps).
+      const latest = prev[0]
+      if (latest) {
+        const latestTs = new Date(latest.timestamp || 0).getTime()
+        const nowTs = Date.now()
+        const sameType = latest.activityTypeId === activityTypeId
+        const sameQty = Number(latest.quantity || 0) === Number(safeQuantity || 0)
+        const sameUnit = String(latest.unit || '') === String(safeUnit || '')
+        const sameMeta = JSON.stringify(latest.meta || {}) === JSON.stringify(meta || {})
+        if (sameType && sameQty && sameUnit && sameMeta && Number.isFinite(latestTs) && nowTs - latestTs < 4000) {
+          return prev
+        }
+      }
       const next = [entry, ...prev].slice(0, 200)
       try {
         const payload = JSON.stringify(next)
@@ -1345,7 +1438,7 @@ export default function SoilSenseApp() {
   }, [isGeminiKeyBlocked])
 
   const locationLine = useMemo(() => {
-    if (geoStatus === 'loading') return t('common.geolocation.requesting')
+    if (geoStatus === 'loading') return t('common.loading')
     if (geoStatus === 'error')
       return geoError
         ? `${t('common.geolocation.locationErrorPrefix')}${geoError}`
@@ -1353,10 +1446,10 @@ export default function SoilSenseApp() {
     if (geoStatus === 'success' && coords) {
       const lat = toFixedOrDash(coords.latitude, 5)
       const lon = toFixedOrDash(coords.longitude, 5)
-      return `${t('common.geolocation.usingLocation')}: ${t('common.geolocation.latLabel')} ${lat}, ${t('common.geolocation.lonLabel')} ${lon}`
+      return `${t('fields.fieldAddress')}: ${profile?.address || '-'} | ${t('common.geolocation.latLabel')} ${lat}, ${t('common.geolocation.lonLabel')} ${lon}`
     }
-    return t('common.geolocation.notSetYet')
-  }, [coords, geoError, geoStatus, t])
+    return t('fields.locationSetupHint')
+  }, [coords, geoError, geoStatus, t, profile?.address])
 
   function requestLocation() {
     if (!('geolocation' in navigator)) {
@@ -1494,12 +1587,17 @@ export default function SoilSenseApp() {
       setGeoError('')
       return
     }
-
-    requestLocation()
+    setGeoStatus('idle')
+    setGeoError('')
   }, [])
 
   async function runAdvice({ weatherSignalsOverride, correlationId: correlationIdOverride } = {}) {
-    if (!coords) return
+    const hasCoords =
+      Boolean(coords) &&
+      typeof coords?.latitude === 'number' &&
+      typeof coords?.longitude === 'number'
+    const hasAddress = typeof profile?.address === 'string' && profile.address.trim().length > 0
+    if (!hasCoords && !hasAddress) return
     const correlationId =
       typeof correlationIdOverride === 'string' && correlationIdOverride.trim().length ? correlationIdOverride : ensureRunId()
     setAiStatus('loading')
@@ -1517,7 +1615,7 @@ export default function SoilSenseApp() {
           smartWeatherSignals && typeof smartWeatherSignals === 'object' && now - smartWeatherLastFetchAtRef.current < SMART_WEATHER_REFRESH_MS / 2
         if (canReuse) {
           weatherSignals = smartWeatherSignals
-        } else {
+        } else if (hasCoords) {
           try {
             weatherSignals = await fetchOpenMeteoSignals(coords.latitude, coords.longitude, { correlationId })
           } catch (err) {
@@ -1530,12 +1628,21 @@ export default function SoilSenseApp() {
       }
 
       const climateZoneHint = deriveClimateZoneHintFromWeatherSignals(weatherSignals || {})
+      const envIntel = await generateLocationEnvironmentalAnalysis({
+        address: profile?.address || '',
+        latitude: hasCoords ? coords.latitude : null,
+        longitude: hasCoords ? coords.longitude : null,
+        weatherSummary: weatherSignals || {},
+        lang,
+        correlationId,
+      }).catch(() => null)
+      if (envIntel && !envIntel?.parseError) setLocationIntel(envIntel)
 
       const text = await generateRegenerativeAdvice({
         location: {
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-          climateZone: climateZoneHint,
+          latitude: hasCoords ? coords.latitude : null,
+          longitude: hasCoords ? coords.longitude : null,
+          climateZone: envIntel?.climateZone || climateZoneHint,
         },
         weatherSignals,
         lang,
@@ -1667,12 +1774,18 @@ export default function SoilSenseApp() {
           })
 
           const tasksCandidate = dailyJson?.tasks
-          const tasks =
-            Array.isArray(tasksCandidate) && tasksCandidate.length === 3
+          const cropTasks = buildCropDrivenDailyTasks(fieldPlan, t)
+          const hasCropSelection = Array.isArray(profile?.currentCrops) && profile.currentCrops.length > 0
+          const tasks = hasCropSelection
+            ? cropTasks
+            : Array.isArray(tasksCandidate) && tasksCandidate.length === 3
               ? tasksCandidate
               : buildDailyTasksFallback(signals, t)
-          const taskSource =
-            Array.isArray(tasksCandidate) && tasksCandidate.length === 3 ? 'ai' : 'fallback'
+          const taskSource = hasCropSelection
+            ? 'cropPlanner'
+            : Array.isArray(tasksCandidate) && tasksCandidate.length === 3
+              ? 'ai'
+              : 'fallback'
 
           setDailyTasks(tasks)
           setDailyTasksStatus('success')
@@ -1692,7 +1805,8 @@ export default function SoilSenseApp() {
             })
           }
         } catch {
-          const tasks = buildDailyTasksFallback(signals, t)
+          const hasCropSelection = Array.isArray(profile?.currentCrops) && profile.currentCrops.length > 0
+          const tasks = hasCropSelection ? buildCropDrivenDailyTasks(fieldPlan, t) : buildDailyTasksFallback(signals, t)
           setDailyTasks(tasks)
           setDailyTasksStatus('success')
           setDailyTasksError('')
@@ -1739,7 +1853,8 @@ export default function SoilSenseApp() {
       setVitalityError(err?.message ? err.message : String(err))
 
       if (dailyTasks.length === 0 && !dailyTasksGenerationInFlightRef.current) {
-        const tasks = buildDailyTasksFallback({}, t)
+        const hasCropSelection = Array.isArray(profile?.currentCrops) && profile.currentCrops.length > 0
+        const tasks = hasCropSelection ? buildCropDrivenDailyTasks(fieldPlan, t) : buildDailyTasksFallback({}, t)
         setDailyTasks(tasks)
         setDailyTasksStatus('success')
         setDailyTasksError('')
@@ -1820,12 +1935,19 @@ export default function SoilSenseApp() {
       })
 
       const tasksCandidate = dailyJson?.tasks
-      const tasks =
-        Array.isArray(tasksCandidate) && tasksCandidate.length === 3
+      const cropTasks = buildCropDrivenDailyTasks(fieldPlan, t)
+      const hasCropSelection = Array.isArray(profile?.currentCrops) && profile.currentCrops.length > 0
+      const tasks = hasCropSelection
+        ? cropTasks
+        : Array.isArray(tasksCandidate) && tasksCandidate.length === 3
           ? tasksCandidate
           : buildDailyTasksFallback(signals, t)
 
-      const taskSource = Array.isArray(tasksCandidate) && tasksCandidate.length === 3 ? 'ai' : 'fallback'
+      const taskSource = hasCropSelection
+        ? 'cropPlanner'
+        : Array.isArray(tasksCandidate) && tasksCandidate.length === 3
+          ? 'ai'
+          : 'fallback'
       setDailyTasks(tasks)
       setDailyTasksStatus('success')
 
@@ -1849,7 +1971,8 @@ export default function SoilSenseApp() {
         })
       }
     } catch {
-      const tasks = buildDailyTasksFallback(signals, t)
+      const hasCropSelection = Array.isArray(profile?.currentCrops) && profile.currentCrops.length > 0
+      const tasks = hasCropSelection ? buildCropDrivenDailyTasks(fieldPlan, t) : buildDailyTasksFallback(signals, t)
       setDailyTasks(tasks)
       setDailyTasksStatus('success')
       setDailyTasksError('')
@@ -1909,6 +2032,18 @@ export default function SoilSenseApp() {
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coords, geoStatus])
+
+  useEffect(() => {
+    const hasCoords =
+      geoStatus === 'success' &&
+      Boolean(coords) &&
+      typeof coords?.latitude === 'number' &&
+      typeof coords?.longitude === 'number'
+    const hasAddress = typeof profile?.address === 'string' && profile.address.trim().length > 0
+    if (hasCoords || !hasAddress) return
+    void runAdvice({ correlationId: ensureRunId() })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.address, geoStatus])
 
   // If the user changes language, re-run Smart Alert so Gemini responses update immediately.
   useEffect(() => {
@@ -2111,16 +2246,6 @@ export default function SoilSenseApp() {
                   </div>
                 </div>
 
-                {geoStatus !== 'success' ? (
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-inline request-location-btn"
-                    onClick={requestLocation}
-                    disabled={geoStatus === 'loading'}
-                  >
-                    {geoStatus === 'error' ? t('common.retryLocation') : t('common.requestLocation')}
-                  </button>
-                ) : null}
                 <button
                   type="button"
                   className="btn btn-ghost btn-inline"
@@ -2128,11 +2253,17 @@ export default function SoilSenseApp() {
                   onClick={() => {
                     uiLog.info('ui.modal.profile', { action: 'open' })
                     setSoilTypeDraft(profile?.soilType || 'loam')
+                    setCurrentCropsDraft(Array.isArray(profile?.currentCrops) ? profile.currentCrops : [])
                     setProfileOpen(true)
                   }}
                 >
                   {t('profile.manageProfile')}
                 </button>
+                {profileSaveNotice ? (
+                  <p className="muted" style={{ marginTop: 8 }}>
+                    {profileSaveNotice}
+                  </p>
+                ) : null}
               </header>
 
               {usesRuntimeKey ? (
@@ -2173,7 +2304,7 @@ export default function SoilSenseApp() {
                     <p className="muted">
                       {geoStatus === 'success'
                         ? t('common.preparingAlert')
-                        : t('common.requestLocationEnable')}
+                        : t('fields.locationSetupHint')}
                     </p>
                   ) : null}
 
@@ -2201,6 +2332,9 @@ export default function SoilSenseApp() {
                       </p>
                       {smartAlert.reason ? (
                         <p className="muted smart-details smart-reason">{smartAlert.reason}</p>
+                      ) : null}
+                      {typeof locationIntel?.regionalSummary === 'string' && locationIntel.regionalSummary.trim() ? (
+                        <p className="muted smart-details">{locationIntel.regionalSummary}</p>
                       ) : null}
                       {Array.isArray(smartAlert.instruction) && smartAlert.instruction.length ? (
                         <ul className="smart-instruction">
@@ -2486,9 +2620,9 @@ export default function SoilSenseApp() {
                   <div className="card-hint">{t('common.builtForSoilHealth')}</div>
                 </div>
 
-                {geoStatus !== 'success' ? (
+                {geoStatus !== 'success' && !(typeof profile?.address === 'string' && profile.address.trim()) ? (
                   <div className="card-body">
-                    <p className="muted">{t('common.enableLocationForAdvice')}</p>
+                    <p className="muted">{t('fields.locationSetupHint')}</p>
                     <p className="muted" style={{ marginTop: 10, lineHeight: 1.4 }}>
                       {t('common.soilAdviceEmpatheticReminder')}
                     </p>
@@ -2523,7 +2657,7 @@ export default function SoilSenseApp() {
                   </div>
                 ) : null}
 
-                {geoStatus === 'success' && aiStatus === 'idle' ? (
+                {(geoStatus === 'success' || (typeof profile?.address === 'string' && profile.address.trim())) && aiStatus === 'idle' ? (
                   <div className="card-body">
                     <p className="muted" style={{ lineHeight: 1.4 }}>
                       {t('common.soilAdviceEmpatheticReminder')}
@@ -2594,6 +2728,16 @@ export default function SoilSenseApp() {
             </section>
           ) : null}
 
+          {activeTab === 'planner' ? (
+            <section className="dashboard dashboard-stack">
+              <header className="dashboard-header">
+                <h1 className="dashboard-title">{t('fieldPlanner.title')}</h1>
+                <p className="dashboard-subtitle">{t('fieldPlanner.subtitle')}</p>
+              </header>
+              <FieldPlanner t={t} fieldPlan={fieldPlan} />
+            </section>
+          ) : null}
+
           {activeTab === 'compost' ? (
             <section className="dashboard">
               <header className="dashboard-header">
@@ -2616,7 +2760,7 @@ export default function SoilSenseApp() {
                   {compostGuideOpen ? <CompostGuide compact /> : null}
 
                   <CompostWizard
-                    onRecipeGenerated={() => addGreenPoints(10)}
+                    onRecipeGenerated={() => addGreenPointsOnce(`compost-recipe:${dailyTasksDayKey}`, 10)}
                     lang={lang}
                   />
                 </div>
@@ -2709,13 +2853,13 @@ export default function SoilSenseApp() {
               inset: 0,
               background: 'rgba(0,0,0,0.22)',
               display: 'flex',
-              alignItems: 'center',
+              alignItems: 'flex-end',
               justifyContent: 'center',
               zIndex: 1200,
               padding: 16,
             }}
           >
-            <section className="card" style={{ width: '100%', maxWidth: 480 }}>
+            <section className="card" style={{ width: '100%', maxWidth: 620, maxHeight: '82vh', overflowY: 'auto' }}>
               <div className="card-top">
                 <div className="card-title-wrap">
                   <h2 className="card-title">{t('profile.title')}</h2>
@@ -2799,15 +2943,66 @@ export default function SoilSenseApp() {
                   </div>
                 </div>
 
+                <div style={{ marginTop: 12 }}>
+                  <p className="field-label" style={{ marginBottom: 6 }}>
+                    {t('profile.currentCropsLabel')}
+                  </p>
+                  <div style={{ display: 'grid', gap: 6 }}>
+                    {availableCrops.map((crop) => {
+                      const checked = currentCropsDraft.includes(crop.id)
+                      return (
+                        <label key={crop.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              setCurrentCropsDraft((prev) =>
+                                e.target.checked ? [...prev, crop.id] : prev.filter((x) => x !== crop.id)
+                              )
+                            }}
+                          />
+                          <span style={{ fontWeight: 800 }}>{t(`crops.${crop.id}`)}</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
+
                 <p className="muted" style={{ marginTop: 10 }}>
                   {typeof coords?.latitude === 'number' && typeof coords?.longitude === 'number'
                     ? `${t('profile.locationSaved')}: ${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`
                     : t('profile.locationNotSaved')}
                 </p>
+                {typeof locationIntel?.climateZone === 'string' ? (
+                  <p className="muted" style={{ marginTop: 6 }}>
+                    {locationIntel.climateZone}
+                  </p>
+                ) : null}
+
+                <section
+                  style={{
+                    marginTop: 12,
+                    border: '1px solid rgba(26, 67, 50, 0.14)',
+                    borderRadius: 12,
+                    padding: 10,
+                    background: 'rgba(124, 166, 137, 0.06)',
+                  }}
+                >
+                  <p className="field-label" style={{ marginBottom: 6 }}>
+                    {t('profile.currentSituation')}
+                  </p>
+                  <p className="muted" style={{ margin: 0 }}>
+                    {t(`profile.soilTypes.${profile?.soilType || 'loam'}`)} |{' '}
+                    {typeof profile?.fieldSize?.value === 'number'
+                      ? `${profile.fieldSize.value} ${t(`profile.fieldSizeUnits.${profile.fieldSize.unit || 'ha'}`)}`
+                      : '-'}{' '}
+                    | {typeof profile?.workforce === 'number' ? profile.workforce : '-'}
+                  </p>
+                </section>
 
                 <div className="key-actions">
                   <button type="button" className="btn btn-primary" onClick={saveProfileDraft}>
-                    {t('profile.saveProfile')}
+                    {t('profile.saveAndExit')}
                   </button>
                   <button
                     type="button"

@@ -7,7 +7,9 @@ If specific details are missing, make reasonable regenerative best-practice assu
 
 export function buildLanguageInstruction(lang) {
   const languageName = getLanguageDisplayName(lang)
-  return languageName ? `Respond in ${languageName}.` : ''
+  return languageName
+    ? `You MUST respond only in ${languageName}. Do not mix languages, do not default to English, and do not transliterate unless explicitly requested.`
+    : ''
 }
 
 export function formatCoords(latitude, longitude) {

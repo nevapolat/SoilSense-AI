@@ -791,3 +791,52 @@ Rules:
   }
 }
 
+export async function generateLocationEnvironmentalAnalysis({
+  address,
+  latitude,
+  longitude,
+  weatherSummary,
+  lang,
+  correlationId,
+} = {}) {
+  const t0 = performance.now()
+  const model = getResolvedGeminiModelName()
+  geminiLog.info('gemini.locationIntel.start', { model }, { correlationId })
+  const locationLine = formatCoords(latitude, longitude)
+  const prompt = `${REG_AGRI_EXPERT_PERSONA}
+${buildLanguageInstruction(lang)}
+Analyze this farming location and return practical environmental intelligence.
+
+Location:
+- Address: ${address || 'unknown'}
+- ${locationLine}
+
+Weather summary:
+${JSON.stringify(weatherSummary || {})}
+
+Return ONLY strict JSON:
+{
+  "climateZone": string,
+  "generalSoilCharacteristics": string[],
+  "cropSuitability": string[],
+  "regionalSummary": string
+}
+
+Rules:
+- Keep "generalSoilCharacteristics" to 3-5 concise items.
+- Keep "cropSuitability" to 4-8 region-appropriate crop names.
+- "regionalSummary" should be 1 short sentence for farmers.`
+  try {
+    const text = await generateGeminiText(prompt)
+    const json = extractJson(text)
+    if (json) return json
+    return { parseError: true, rawText: text }
+  } catch (err) {
+    geminiLog.error('gemini.locationIntel.error', normalizeErrorForLog(err), {
+      correlationId,
+      durationMs: performance.now() - t0,
+    })
+    throw err
+  }
+}
+
