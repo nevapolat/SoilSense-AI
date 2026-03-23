@@ -129,6 +129,7 @@ export async function generateRegenerativeAdvice({
   const model = getResolvedGeminiModelName()
   geminiLog.info('gemini.soilAdvice.start', { model }, { correlationId })
   const locationLine = formatCoords(location?.latitude, location?.longitude)
+  const addressLine = typeof location?.address === 'string' && location.address.trim() ? location.address.trim() : 'unknown'
 
   const equipment = profile?.equipment && typeof profile.equipment === 'object' ? profile.equipment : {}
   const equipmentList = [
@@ -154,11 +155,9 @@ export async function generateRegenerativeAdvice({
 
   const tempNowC = typeof weatherSignals?.tempNowC === 'number' ? weatherSignals.tempNowC : null
   const humidityNowPct = typeof weatherSignals?.humidityNowPct === 'number' ? weatherSignals.humidityNowPct : null
-  const dewPointNowC = typeof weatherSignals?.dewPointNowC === 'number' ? weatherSignals.dewPointNowC : null
   const windKph = typeof weatherSignals?.windKph === 'number' ? weatherSignals.windKph : null
   const precipNowMm = typeof weatherSignals?.precipNowMm === 'number' ? weatherSignals.precipNowMm : null
   const precipSumMm = typeof weatherSignals?.precipitationSumMm === 'number' ? weatherSignals.precipitationSumMm : null
-  const next48hMinTempC = typeof weatherSignals?.next48hMinTempC === 'number' ? weatherSignals.next48hMinTempC : null
   const humidityBucket = typeof weatherSignals?.humidityBucket === 'string' ? weatherSignals.humidityBucket : null
   const sunBucket = typeof weatherSignals?.sunBucket === 'string' ? weatherSignals.sunBucket : null
   const frostRisk48h =
@@ -200,6 +199,7 @@ Provide next-step advice to improve soil health and increase organic carbon.
 Be specific about regenerative practices (e.g., cover crops, compost, reduced tillage, mulching, grazing management, soil testing cadence).
 
 Location-aware context:
+Address: ${addressLine}
 ${locationLine}
 Climate zone hint: ${climateZoneHint}
 
@@ -833,6 +833,77 @@ Rules:
     return { parseError: true, rawText: text }
   } catch (err) {
     geminiLog.error('gemini.locationIntel.error', normalizeErrorForLog(err), {
+      correlationId,
+      durationMs: performance.now() - t0,
+    })
+    throw err
+  }
+}
+
+export async function generateFarmDailyInsight({
+  locationContext,
+  weatherSignals,
+  soilSignals,
+  climatePatterns,
+  userActions,
+  cropType,
+  farmMemory,
+  lang,
+  correlationId,
+} = {}) {
+  const t0 = performance.now()
+  const model = getResolvedGeminiModelName()
+  geminiLog.info('gemini.farmDailyInsight.start', { model }, { correlationId })
+
+  const locationUsed =
+    typeof locationContext?.locationUsed === 'string' && locationContext.locationUsed.trim()
+      ? locationContext.locationUsed.trim()
+      : 'unknown'
+
+  const prompt = `${REG_AGRI_EXPERT_PERSONA}
+${buildLanguageInstruction(lang)}
+
+You are SoilSense AI, a long-term agricultural intelligence system.
+
+Rules:
+- Always prioritize manual farm location over device GPS.
+- If location is unclear, ask for clarification in the daily_summary and set confidence_level to "low".
+- Never reset memory unless explicitly instructed.
+- Use farm memory as time-series history. Prioritize recent data but include trend context.
+- Keep the tone warm, supportive, and practical for farmers.
+- Avoid generic advice and avoid heavy jargon.
+- Return ONLY strict JSON with this schema:
+{
+  "location_used": string,
+  "daily_summary": string,
+  "detected_changes": string,
+  "soil_health_status": string,
+  "recommendations": string[],
+  "confidence_level": "low" | "medium" | "high"
+}
+
+Input context:
+locationContext: ${JSON.stringify(locationContext || {})}
+weatherSignals: ${JSON.stringify(weatherSignals || {})}
+soilSignals: ${JSON.stringify(soilSignals || {})}
+climatePatterns: ${JSON.stringify(climatePatterns || {})}
+userActions: ${JSON.stringify(userActions || [])}
+cropType: ${JSON.stringify(cropType || null)}
+farmMemory: ${JSON.stringify(farmMemory || {})}
+
+Output constraints:
+- location_used must equal "${locationUsed}" unless unknown.
+- recommendations must include 3-6 specific, actionable steps.
+- detected_changes must mention meaningful trend shifts when history exists.
+- Keep values concise and practical for a farmer.`
+
+  try {
+    const text = await generateGeminiText(prompt)
+    const json = extractJson(text)
+    if (json) return json
+    return { parseError: true, rawText: text }
+  } catch (err) {
+    geminiLog.error('gemini.farmDailyInsight.error', normalizeErrorForLog(err), {
       correlationId,
       durationMs: performance.now() - t0,
     })

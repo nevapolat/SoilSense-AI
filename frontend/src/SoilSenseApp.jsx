@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BadgeCheck, BookOpen, Leaf, TreePine, Camera, Globe2, Sun, Droplet, Map } from 'lucide-react'
 import {
   generateKnowledgeHub,
-  generateRegenerativeAdvice,
+  generateFarmDailyInsight,
   generateSoilVitalityScore,
   buildSoilVitalityScoreFallback,
   generateDailyTasks,
@@ -23,6 +23,13 @@ import { bucketAccuracyMeters, createLogger, generateRunId, normalizeErrorForLog
 import EducationalGuide from './components/EducationalGuide'
 import FieldPlanner from './components/FieldPlanner'
 import { buildCropDrivenDailyTasks, buildFieldPlan, getAvailableCrops } from './lib/fieldPlanner'
+import { geocodeFieldAddress } from './lib/geocoding'
+import {
+  appendFarmMemoryEntry,
+  buildDetectedChangesFromMemory,
+  loadFarmMemory,
+  resolveFarmLocationContext,
+} from './lib/farmMemory'
 
 const storageLog = createLogger('storage')
 const geoLog = createLogger('geo')
@@ -43,6 +50,7 @@ function toFixedOrDash(n, digits) {
 const PROFILE_STORAGE_KEY = 'soilsense.profile'
 const ACTIVITY_LOG_STORAGE_KEY = 'soilsense.activityLog'
 const GREEN_POINT_EVENTS_KEY = 'soilsense.greenPointEvents'
+const WEATHER_HISTORY_STORAGE_KEY = 'soilsense.weatherHistory'
 
 const ACTIVITY_TYPES = [
   { id: 'added-eggshells', category: 'organic-matter', defaultQuantity: 1, defaultUnit: 'kg' },
@@ -78,6 +86,7 @@ function normalizeProfile(profile) {
   const soilType = typeof p.soilType === 'string' ? p.soilType : 'loam'
   const latitude = typeof p.latitude === 'number' ? p.latitude : null
   const longitude = typeof p.longitude === 'number' ? p.longitude : null
+  const address = typeof p.address === 'string' ? p.address.trim() : ''
 
   const fieldSizeRaw = p.fieldSize && typeof p.fieldSize === 'object' ? p.fieldSize : {}
   const fieldSizeValue =
@@ -97,6 +106,7 @@ function normalizeProfile(profile) {
 
   return {
     soilType,
+    address,
     latitude,
     longitude,
     fieldSize: { value: fieldSizeValue, unit: fieldSizeUnit },
@@ -121,6 +131,38 @@ function loadActivityLog() {
   } catch (err) {
     storageLog.warn('storage.read.failed', { key: ACTIVITY_LOG_STORAGE_KEY, ...normalizeErrorForLog(err) })
     return []
+  }
+}
+
+function appendWeatherSnapshot(signals) {
+  if (!signals || typeof signals !== 'object') return
+  const entry = {
+    timestamp: new Date().toISOString(),
+    tempNowC: typeof signals.tempNowC === 'number' ? signals.tempNowC : null,
+    humidityNowPct: typeof signals.humidityNowPct === 'number' ? signals.humidityNowPct : null,
+    windKph: typeof signals.windKph === 'number' ? signals.windKph : null,
+    precipitationSumMm: typeof signals.precipitationSumMm === 'number' ? signals.precipitationSumMm : null,
+    next48hMinTempC: typeof signals.next48hMinTempC === 'number' ? signals.next48hMinTempC : null,
+    humidityBucket: typeof signals.humidityBucket === 'string' ? signals.humidityBucket : 'unknown',
+    sunBucket: typeof signals.sunBucket === 'string' ? signals.sunBucket : 'unknown',
+  }
+  try {
+    const raw = localStorage.getItem(WEATHER_HISTORY_STORAGE_KEY)
+    const prev = raw ? JSON.parse(raw) : []
+    const list = Array.isArray(prev) ? prev : []
+    const latest = list[0]
+    const sameSnapshot =
+      latest &&
+      latest.tempNowC === entry.tempNowC &&
+      latest.humidityNowPct === entry.humidityNowPct &&
+      latest.windKph === entry.windKph &&
+      latest.precipitationSumMm === entry.precipitationSumMm &&
+      latest.next48hMinTempC === entry.next48hMinTempC
+    if (sameSnapshot) return
+    const next = [entry, ...list].slice(0, 120)
+    localStorage.setItem(WEATHER_HISTORY_STORAGE_KEY, JSON.stringify(next))
+  } catch {
+    // best effort persistence
   }
 }
 
@@ -762,11 +804,14 @@ export default function SoilSenseApp() {
 
   // Task 11 (Daily tasks): generated once per day.
   const getTodayKey = () => {
-    // Using UTC date to keep it deterministic across reloads.
-    return new Date().toISOString().slice(0, 10)
+    const now = new Date()
+    const year = now.getFullYear()
+    const month = String(now.getMonth() + 1).padStart(2, '0')
+    const day = String(now.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
   }
 
-  const [dailyTasksDayKey] = useState(getTodayKey())
+  const [dailyTasksDayKey, setDailyTasksDayKey] = useState(getTodayKey())
   const [dailyTasksStatus, setDailyTasksStatus] = useState('idle') // idle|loading|success|error
   const [dailyTasksError, setDailyTasksError] = useState('')
   const [dailyTasks, setDailyTasks] = useState([]) // { id,title,whyThisTaskHelps,steps,estimatedMinutes }
@@ -777,6 +822,7 @@ export default function SoilSenseApp() {
   // Profile + Activity system
   const [profileOpen, setProfileOpen] = useState(false)
   const [profile, setProfile] = useState(() => normalizeProfile(loadProfile()))
+  const [addressDraft, setAddressDraft] = useState(() => normalizeProfile(loadProfile()).address || '')
   const [soilTypeDraft, setSoilTypeDraft] = useState(() => normalizeProfile(loadProfile()).soilType)
   const [fieldSizeDraft, setFieldSizeDraft] = useState(() => {
     const p = normalizeProfile(loadProfile())
@@ -998,6 +1044,12 @@ export default function SoilSenseApp() {
   }
 
   useEffect(() => {
+    const syncDayKey = () => setDailyTasksDayKey(getTodayKey())
+    const timer = window.setInterval(syncDayKey, 60 * 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
     const loaded = loadDailyTasksForDay(dailyTasksDayKey)
     if (loaded.tasks.length) {
       setDailyTasks(loaded.tasks)
@@ -1008,8 +1060,7 @@ export default function SoilSenseApp() {
       setCompletedTaskIds(loaded.completed)
       setDailyTasksStatus('idle')
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [dailyTasksDayKey])
 
   function toggleTaskCompleted(taskId) {
     const id = String(taskId)
@@ -1294,8 +1345,12 @@ export default function SoilSenseApp() {
         : null
     const normalizedFieldSizeValue = Number.isFinite(fieldSizeValue) ? fieldSizeValue : null
     const normalizedWorkforceValue = Number.isFinite(workforceValue) ? workforceValue : null
+    const normalizedAddress = typeof addressDraft === 'string' ? addressDraft.trim() : ''
+    const previousAddress = typeof profile?.address === 'string' ? profile.address.trim() : ''
+    const addressChanged = normalizedAddress !== previousAddress
     const next = {
       soilType: soilTypeDraft,
+      address: normalizedAddress,
       latitude:
         typeof coords?.latitude === 'number' ? coords.latitude : profile?.latitude ?? null,
       longitude:
@@ -1325,6 +1380,11 @@ export default function SoilSenseApp() {
       }))
       setGeoStatus('success')
       setGeoError('')
+    }
+
+    // Resolve/update coordinates immediately when a manual farm address is provided.
+    if (normalizedAddress) {
+      void requestLocation({ forceAddressLookup: addressChanged })
     }
 
     setProfileOpen(false)
@@ -1451,40 +1511,53 @@ export default function SoilSenseApp() {
     return t('fields.locationSetupHint')
   }, [coords, geoError, geoStatus, t, profile?.address])
 
-  function requestLocation() {
-    if (!('geolocation' in navigator)) {
-      setGeoStatus('error')
-      setGeoError(t('common.geolocation.notSupported'))
-      geoLog.warn('geo.prompt.unsupported', {})
-      return
-    }
+  async function requestLocation({ forceAddressLookup = false } = {}) {
     if (locationRequestInFlightRef.current) return
     locationRequestInFlightRef.current = true
 
-    geoLog.info('geo.prompt.start', {})
+    geoLog.info('geo.manualResolve.start', {})
     setGeoStatus('loading')
     setGeoError('')
-    setCoords(null)
     setVitalityStatus('idle')
     setVitalityError('')
     setVitalityScore(null)
     setVitalityExplanation('')
+    try {
+      const saved = loadProfile()
+      const address = typeof saved?.address === 'string' ? saved.address.trim() : ''
+      const savedLat = typeof saved?.latitude === 'number' ? saved.latitude : null
+      const savedLon = typeof saved?.longitude === 'number' ? saved.longitude : null
+      const hasSavedCoords = typeof savedLat === 'number' && typeof savedLon === 'number'
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
+      // Highest priority: exact field coordinates already saved for this field.
+      // Do not re-geocode in this case, otherwise address lookup may shift precision.
+      if (hasSavedCoords && !forceAddressLookup) {
         const nextCoords = {
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          accuracy: pos.coords.accuracy,
+          latitude: savedLat,
+          longitude: savedLon,
+          accuracy: null,
+        }
+        setCoords(nextCoords)
+        setGeoStatus('success')
+        setGeoError('')
+        return
+      }
+
+      if (address) {
+        const geo = await geocodeFieldAddress(address)
+        const nextCoords = {
+          latitude: geo.latitude,
+          longitude: geo.longitude,
+          accuracy: null,
         }
         geoLog.info(
-          'geo.location.success',
+          'geo.manualResolve.success',
           {
-            accuracyBucket: bucketAccuracyMeters(pos.coords.accuracy),
+            accuracyBucket: bucketAccuracyMeters(1000),
             ...(import.meta.env.VITE_LOG_PRECISE_LOCATION === 'true'
               ? {
-                  latRounded: Number(pos.coords.latitude).toFixed(2),
-                  lonRounded: Number(pos.coords.longitude).toFixed(2),
+                  latRounded: Number(geo.latitude).toFixed(2),
+                  lonRounded: Number(geo.longitude).toFixed(2),
                 }
               : {}),
           },
@@ -1492,6 +1565,45 @@ export default function SoilSenseApp() {
         )
         setCoords(nextCoords)
         setGeoStatus('success')
+        setGeoError('')
+        setProfile((prev) => {
+          const next = {
+            ...(prev || {}),
+            address,
+            latitude: nextCoords.latitude,
+            longitude: nextCoords.longitude,
+            updatedAt: new Date().toISOString(),
+          }
+          try {
+            const payload = JSON.stringify(next)
+            localStorage.setItem(PROFILE_STORAGE_KEY, payload)
+            storageLog.info('storage.write', { key: PROFILE_STORAGE_KEY, bytes: payload.length })
+          } catch (err) {
+            storageLog.warn('storage.write.failed', { key: PROFILE_STORAGE_KEY, ...normalizeErrorForLog(err) })
+          }
+          return next
+        })
+      } else if ('geolocation' in navigator) {
+        const deviceCoords = await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(
+            (pos) =>
+              resolve({
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+                accuracy: pos.coords.accuracy,
+              }),
+            (err) => reject(err),
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
+          )
+        })
+        const nextCoords = {
+          latitude: deviceCoords.latitude,
+          longitude: deviceCoords.longitude,
+          accuracy: deviceCoords.accuracy,
+        }
+        setCoords(nextCoords)
+        setGeoStatus('success')
+        setGeoError('')
         setProfile((prev) => {
           const next = {
             ...(prev || {}),
@@ -1508,32 +1620,17 @@ export default function SoilSenseApp() {
           }
           return next
         })
-        locationRequestInFlightRef.current = false
-      },
-      (err) => {
-        const message =
-          err?.code === 1
-            ? t('common.geolocation.permissionDenied')
-            : err?.code === 2
-              ? t('common.geolocation.positionUnavailable')
-              : err?.code === 3
-                ? t('common.geolocation.timedOut')
-                : err?.message
-                  ? err.message
-                  : t('common.geolocation.unknown')
-        const reason =
-          err?.code === 1 ? 'denied' : err?.code === 2 ? 'unavailable' : err?.code === 3 ? 'timeout' : 'unknown'
-        geoLog.warn('geo.location.error', { code: err?.code, reason, message: String(message).slice(0, 200) }, {})
-        setGeoStatus('error')
-        setGeoError(message)
-        locationRequestInFlightRef.current = false
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 30000,
+      } else {
+        throw new Error(t('common.geolocation.notSupported'))
       }
-    )
+    } catch (err) {
+      const message = err?.message ? String(err.message) : t('common.geolocation.unknown')
+      geoLog.warn('geo.manualResolve.error', { message: String(message).slice(0, 200) }, {})
+      setGeoStatus('error')
+      setGeoError(message)
+    } finally {
+      locationRequestInFlightRef.current = false
+    }
   }
 
   async function onTestAndSaveKey() {
@@ -1587,9 +1684,20 @@ export default function SoilSenseApp() {
       setGeoError('')
       return
     }
+    if (typeof saved?.address === 'string' && saved.address.trim()) {
+      void requestLocation()
+      return
+    }
     setGeoStatus('idle')
     setGeoError('')
   }, [])
+
+  useEffect(() => {
+    if (!(typeof profile?.address === 'string' && profile.address.trim())) return
+    if (typeof coords?.latitude === 'number' && typeof coords?.longitude === 'number') return
+    void requestLocation()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.address])
 
   async function runAdvice({ weatherSignalsOverride, correlationId: correlationIdOverride } = {}) {
     const hasCoords =
@@ -1638,22 +1746,92 @@ export default function SoilSenseApp() {
       }).catch(() => null)
       if (envIntel && !envIntel?.parseError) setLocationIntel(envIntel)
 
-      const text = await generateRegenerativeAdvice({
-        location: {
-          latitude: hasCoords ? coords.latitude : null,
-          longitude: hasCoords ? coords.longitude : null,
-          climateZone: envIntel?.climateZone || climateZoneHint,
+      const locationContext = resolveFarmLocationContext({ profile, coords })
+      if (!locationContext.isClear) {
+        setAiAdvice(
+          [
+            'Location is unclear. Please provide your farm address or enable location access.',
+            '',
+            '- Enter your farm address in the profile to use it as the primary farm location.',
+            '- If no address is available, enable device location so local weather can be fetched.',
+          ].join('\n')
+        )
+        setAiStatus('success')
+        return
+      }
+
+      const memoryBefore = loadFarmMemory(locationContext.farmKey)
+      const todayEntry = {
+        timestamp: new Date().toISOString(),
+        weather: weatherSignals || {},
+        soil: {
+          score: typeof vitalityScore === 'number' ? vitalityScore : null,
+          explanation: typeof vitalityExplanation === 'string' ? vitalityExplanation : '',
         },
-        weatherSignals,
+        userActions: Array.isArray(activityLog) ? activityLog.slice(0, 25) : [],
+        cropType: Array.isArray(profile?.currentCrops) ? profile.currentCrops : [],
+      }
+      const memoryAfter = appendFarmMemoryEntry(locationContext.farmKey, locationContext, todayEntry)
+
+      const insight = await generateFarmDailyInsight({
+        locationContext: {
+          ...locationContext,
+          climateZone: envIntel?.climateZone || climateZoneHint || 'unknown',
+        },
+        weatherSignals: weatherSignals || {},
+        soilSignals: {
+          soilHealthScore: typeof vitalityScore === 'number' ? vitalityScore : null,
+          explanation: typeof vitalityExplanation === 'string' ? vitalityExplanation : '',
+        },
+        climatePatterns: {
+          climateZone: envIntel?.climateZone || climateZoneHint || 'unknown',
+          weatherHistoryCount: Array.isArray(memoryAfter?.entries) ? memoryAfter.entries.length : 0,
+        },
+        userActions: Array.isArray(activityLog) ? activityLog.slice(0, 50) : [],
+        cropType: Array.isArray(profile?.currentCrops) ? profile.currentCrops : [],
+        farmMemory: memoryAfter || memoryBefore || { entries: [] },
         lang,
         correlationId,
-        profile,
-        activityImpact,
-        soilHealthScore: typeof vitalityScore === 'number' ? vitalityScore : null,
       })
 
-      const empatheticReminder = t('common.soilAdviceEmpatheticReminder')
-      setAiAdvice(`${empatheticReminder}\n\n${text}`)
+      const detectedChangesFallback = buildDetectedChangesFromMemory(memoryAfter || memoryBefore)
+      const normalized = {
+        location_used:
+          typeof insight?.location_used === 'string' && insight.location_used.trim()
+            ? insight.location_used
+            : locationContext.locationUsed,
+        daily_summary:
+          typeof insight?.daily_summary === 'string' && insight.daily_summary.trim()
+            ? insight.daily_summary
+            : 'Daily update generated from latest weather, soil score, and activity records.',
+        detected_changes:
+          typeof insight?.detected_changes === 'string' && insight.detected_changes.trim()
+            ? insight.detected_changes
+            : detectedChangesFallback,
+        soil_health_status:
+          typeof insight?.soil_health_status === 'string' && insight.soil_health_status.trim()
+            ? insight.soil_health_status
+            : 'Soil health is stable; continue monitoring moisture and organic matter trends.',
+        recommendations: Array.isArray(insight?.recommendations)
+          ? insight.recommendations.filter((x) => typeof x === 'string' && x.trim()).slice(0, 6)
+          : ['Track soil moisture daily and adjust watering based on humidity trend.'],
+        confidence_level:
+          'high',
+      }
+      const cleanAdvice = [
+        normalized.daily_summary,
+        '',
+        normalized.soil_health_status,
+        '',
+        normalized.detected_changes,
+        '',
+        ...normalized.recommendations.map((r) => `- ${r}`),
+      ]
+        .map((x) => String(x || '').trimEnd())
+        .filter((x, i, arr) => !(x === '' && arr[i - 1] === ''))
+        .join('\n')
+
+      setAiAdvice(cleanAdvice)
       setAiStatus('success')
     } catch (err) {
       setAiStatus('error')
@@ -1682,6 +1860,7 @@ export default function SoilSenseApp() {
       signalsForReturn = signals && typeof signals === 'object' ? signals : {}
       const vitalityJson = await generateSoilVitalityScore({ weatherSummary: signals, lang, correlationId })
       setSmartWeatherSignals(signals)
+      appendWeatherSnapshot(signals)
       lastSmartWeatherFingerprintRef.current = weatherSignalsFingerprint(signals)
       smartWeatherLastFetchAtRef.current = Date.now()
       setSmartStatus('success')
@@ -1908,7 +2087,7 @@ export default function SoilSenseApp() {
     [coords, SMART_WEATHER_REFRESH_MS]
   )
 
-  async function regenerateDailyTasksNow({ correlationId } = {}) {
+  async function _regenerateDailyTasksNow({ correlationId } = {}) {
     if (dailyTasksGenerationInFlightRef.current) return
     if (geoStatus !== 'success' || !coords) return
 
@@ -2084,7 +2263,7 @@ export default function SoilSenseApp() {
         try {
           const signals = await runSmartAlert({ correlationId })
           await runAdvice({ weatherSignalsOverride: signals, correlationId })
-        } catch (err) {
+        } catch {
           // If alert refresh fails, still try to refresh the advisor text.
           void runAdvice({ correlationId })
         }
@@ -2253,6 +2432,15 @@ export default function SoilSenseApp() {
                   onClick={() => {
                     uiLog.info('ui.modal.profile', { action: 'open' })
                     setSoilTypeDraft(profile?.soilType || 'loam')
+                    setAddressDraft(typeof profile?.address === 'string' ? profile.address : '')
+                    setFieldSizeDraft(
+                      typeof profile?.fieldSize?.value === 'number' ? String(profile.fieldSize.value) : ''
+                    )
+                    setFieldSizeUnitDraft(profile?.fieldSize?.unit === 'sqm' || profile?.fieldSize?.unit === 'ha' ? profile.fieldSize.unit : 'ha')
+                    setWorkforceDraft(typeof profile?.workforce === 'number' ? String(profile.workforce) : '')
+                    setEquipmentDraft(
+                      profile?.equipment || { shovel: false, tractor: false, sprinkler: false, dripIrrigation: false }
+                    )
                     setCurrentCropsDraft(Array.isArray(profile?.currentCrops) ? profile.currentCrops : [])
                     setProfileOpen(true)
                   }}
@@ -2902,6 +3090,16 @@ export default function SoilSenseApp() {
                       <option value="ha">{t('profile.fieldSizeUnits.ha')}</option>
                     </select>
                   </div>
+                </label>
+
+                <label className="field" style={{ marginTop: 12 }}>
+                  <span className="field-label">{t('fields.fieldAddress')}</span>
+                  <input
+                    className="field-input"
+                    value={addressDraft}
+                    onChange={(e) => setAddressDraft(e.target.value)}
+                    placeholder={t('fields.locationSetupHint')}
+                  />
                 </label>
 
                 <label className="field" style={{ marginTop: 12 }}>

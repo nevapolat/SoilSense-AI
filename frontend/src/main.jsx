@@ -8,6 +8,7 @@ import GuideTour from './components/GuideTour.jsx'
 import { useI18n } from './i18n/useI18n'
 import {
   addUserField,
+  deleteUserField,
   getUserById,
   loginWithEmail,
   logoutSession,
@@ -16,8 +17,10 @@ import {
   resetPasswordWithToken,
   restoreSession,
   getRememberedEmail,
+  getRememberedPassword,
   setUserActiveField,
   signUpWithEmail,
+  updateUserField,
   updateFieldLocation,
 } from './lib/auth'
 import { installScopedLocalStorage, toScopedStorageKey } from './lib/storageScope'
@@ -26,6 +29,7 @@ import { geocodeFieldAddress } from './lib/geocoding'
 const appLog = createLogger('app')
 const pwaLog = createLogger('pwa')
 const PROFILE_STORAGE_KEY = 'soilsense.profile'
+const AUTH_SKIP_AUTOLOGIN_ONCE_KEY = 'soilsense.auth.skipAutoLoginOnce.v1'
 
 function parseNumberOrNull(value) {
   const n = Number(String(value || '').trim())
@@ -58,20 +62,100 @@ function ensureScopedProfileSeed(userId, field) {
   }
 }
 
+function syncScopedProfileFromField(userId, field) {
+  if (!userId || !field?.id) return
+  try {
+    const scopedKey = toScopedStorageKey(userId, field.id, PROFILE_STORAGE_KEY)
+    const existingRaw = localStorage.getItem(scopedKey)
+    const existing = existingRaw ? JSON.parse(existingRaw) : {}
+    const payload = {
+      ...existing,
+      soilType: field.soilType || existing?.soilType || 'loam',
+      // Keep per-field scoped location persistent across reloads/switches.
+      // If scoped data already has a location, prefer it over auth-db field defaults.
+      address:
+        typeof existing?.address === 'string' && existing.address.trim()
+          ? existing.address
+          : typeof field.address === 'string'
+            ? field.address
+            : '',
+      latitude:
+        typeof existing?.latitude === 'number'
+          ? existing.latitude
+          : typeof field.manualLocation?.latitude === 'number'
+            ? field.manualLocation.latitude
+            : null,
+      longitude:
+        typeof existing?.longitude === 'number'
+          ? existing.longitude
+          : typeof field.manualLocation?.longitude === 'number'
+            ? field.manualLocation.longitude
+            : null,
+      fieldSize: {
+        value:
+          typeof field.fieldSize?.value === 'number'
+            ? field.fieldSize.value
+            : typeof existing?.fieldSize?.value === 'number'
+              ? existing.fieldSize.value
+              : null,
+        unit: field.fieldSize?.unit === 'sqm' ? 'sqm' : existing?.fieldSize?.unit === 'sqm' ? 'sqm' : 'ha',
+      },
+      updatedAt: new Date().toISOString(),
+    }
+    localStorage.setItem(scopedKey, JSON.stringify(payload))
+  } catch {
+    // best effort sync
+  }
+}
+
+function clearScopedFieldStorage(userId, fieldId) {
+  if (!userId || !fieldId) return
+  const prefix = `soilsense.u.${userId}.f.${fieldId}.`
+  try {
+    const localKeys = []
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i)
+      if (typeof k === 'string' && k.startsWith(prefix)) localKeys.push(k)
+    }
+    for (const k of localKeys) localStorage.removeItem(k)
+  } catch {
+    // best effort local cleanup
+  }
+  try {
+    const sessionKeys = []
+    for (let i = 0; i < sessionStorage.length; i += 1) {
+      const k = sessionStorage.key(i)
+      if (typeof k === 'string' && k.startsWith(prefix)) sessionKeys.push(k)
+    }
+    for (const k of sessionKeys) sessionStorage.removeItem(k)
+  } catch {
+    // best effort session cleanup
+  }
+}
+
 function ScopedAppStorage({ userId, fieldId, children }) {
+  const [scopeReady, setScopeReady] = useState(false)
+
   useEffect(() => {
+    setScopeReady(false)
     const restore = installScopedLocalStorage(`soilsense.u.${userId}.f.${fieldId}.`)
-    return restore
+    setScopeReady(true)
+    return () => {
+      setScopeReady(false)
+      restore()
+    }
   }, [userId, fieldId])
-  return children
+  return scopeReady ? children : null
 }
 
 function AuthScreen({ onAuthenticated }) {
   const { t, lang, changeLanguage, availableLangs, getLanguageNativeLabel } = useI18n()
+  const rememberedEmail = useMemo(() => getRememberedEmail(), [])
+  const rememberedPassword = useMemo(() => getRememberedPassword(), [])
   const [mode, setMode] = useState('login')
-  const [email, setEmail] = useState(() => getRememberedEmail())
-  const [password, setPassword] = useState('')
-  const [rememberMe, setRememberMe] = useState(true)
+  const [email, setEmail] = useState(() => rememberedEmail)
+  const [password, setPassword] = useState(() => rememberedPassword)
+  const [rememberMe, setRememberMe] = useState(() => Boolean(rememberedEmail || rememberedPassword))
   const [resetToken, setResetToken] = useState(() => {
     const hash = String(window.location.hash || '')
     if (!hash.startsWith('#reset=')) return ''
@@ -80,6 +164,7 @@ function AuthScreen({ onAuthenticated }) {
   const [resetSentLink, setResetSentLink] = useState('')
   const [errorText, setErrorText] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [autoLoginAttempted, setAutoLoginAttempted] = useState(false)
 
   function tl(key, fallback) {
     const v = t(key)
@@ -89,6 +174,43 @@ function AuthScreen({ onAuthenticated }) {
   useEffect(() => {
     if (resetToken) setMode('reset')
   }, [resetToken])
+
+  useEffect(() => {
+    if (!rememberMe) return
+    if (!email && rememberedEmail) setEmail(rememberedEmail)
+    if (!password && rememberedPassword) setPassword(rememberedPassword)
+  }, [rememberMe, rememberedEmail, rememberedPassword, email, password])
+
+  useEffect(() => {
+    if (mode !== 'login' || autoLoginAttempted || !rememberMe) return
+    const shouldSkipOnce = sessionStorage.getItem(AUTH_SKIP_AUTOLOGIN_ONCE_KEY) === '1'
+    if (shouldSkipOnce) {
+      sessionStorage.removeItem(AUTH_SKIP_AUTOLOGIN_ONCE_KEY)
+      setAutoLoginAttempted(true)
+      return
+    }
+    const emailCandidate = String(email || rememberedEmail || '').trim()
+    const passwordCandidate = String(password || rememberedPassword || '')
+    if (!emailCandidate || !passwordCandidate) return
+    setAutoLoginAttempted(true)
+    setIsSubmitting(true)
+    setErrorText('')
+    void loginWithEmail({ email: emailCandidate, password: passwordCandidate, rememberMe: true })
+      .then((session) => onAuthenticated(session))
+      .catch(() => {
+        // Keep user on login form if auto-login fails.
+      })
+      .finally(() => setIsSubmitting(false))
+  }, [
+    mode,
+    autoLoginAttempted,
+    rememberMe,
+    email,
+    rememberedEmail,
+    password,
+    rememberedPassword,
+    onAuthenticated,
+  ])
 
   async function submit(event) {
     event.preventDefault()
@@ -165,12 +287,17 @@ function AuthScreen({ onAuthenticated }) {
         </label>
         {mode === 'login' ? (
           <>
-            {!rememberMe ? (
-              <label className="field">
-                <span className="field-label">{tl('auth.password', 'Password')}</span>
-                <input className="field-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} required />
-              </label>
-            ) : null}
+            <label className="field">
+              <span className="field-label">{tl('auth.password', 'Password')}</span>
+              <input
+                className="field-input"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                minLength={8}
+                required={!rememberMe || (!password && !rememberedPassword)}
+              />
+            </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} />
               <span>{tl('auth.rememberMe', 'Remember me')}</span>
@@ -232,6 +359,8 @@ function FirstFieldSetup({ session, onDone }) {
   const [sizeValue, setSizeValue] = useState('')
   const [sizeUnit, setSizeUnit] = useState('ha')
   const [address, setAddress] = useState('')
+  const [lat, setLat] = useState('')
+  const [lon, setLon] = useState('')
   const [errorText, setErrorText] = useState('')
   const [isResolvingAddress, setIsResolvingAddress] = useState(false)
 
@@ -239,8 +368,11 @@ function FirstFieldSetup({ session, onDone }) {
     setErrorText('')
     try {
       setIsResolvingAddress(true)
-      let manualLocation = {}
-      if (address.trim()) {
+      let manualLocation = {
+        latitude: parseNumberOrNull(lat),
+        longitude: parseNumberOrNull(lon),
+      }
+      if (address.trim() && !(typeof manualLocation.latitude === 'number' && typeof manualLocation.longitude === 'number')) {
         try {
           const geo = await geocodeFieldAddress(address)
           manualLocation = { latitude: geo.latitude, longitude: geo.longitude }
@@ -298,6 +430,16 @@ function FirstFieldSetup({ session, onDone }) {
           <span className="field-label">{t('fields.fieldAddress') === 'fields.fieldAddress' ? 'Field Address' : t('fields.fieldAddress')}</span>
           <input className="field-input" value={address} onChange={(e) => setAddress(e.target.value)} />
         </label>
+        <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))' }}>
+          <label className="field">
+            <span className="field-label">{t('fields.manualLatitude', 'Manual Latitude')}</span>
+            <input className="field-input" value={lat} onChange={(e) => setLat(e.target.value)} inputMode="decimal" />
+          </label>
+          <label className="field">
+            <span className="field-label">{t('fields.manualLongitude', 'Manual Longitude')}</span>
+            <input className="field-input" value={lon} onChange={(e) => setLon(e.target.value)} inputMode="decimal" />
+          </label>
+        </div>
         {errorText ? <pre className="error-pre">{errorText}</pre> : null}
         <div className="key-actions">
           <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={isResolvingAddress}>
@@ -314,11 +456,14 @@ function AppRoot() {
   const [session, setSession] = useState(() => restoreSession())
   const [userRefreshSeq, setUserRefreshSeq] = useState(0)
   const [showAddField, setShowAddField] = useState(false)
+  const [editingFieldId, setEditingFieldId] = useState('')
   const [newFieldName, setNewFieldName] = useState('')
   const [newFieldSoilType, setNewFieldSoilType] = useState('loam')
   const [newFieldSizeValue, setNewFieldSizeValue] = useState('')
   const [newFieldSizeUnit, setNewFieldSizeUnit] = useState('ha')
   const [newFieldAddress, setNewFieldAddress] = useState('')
+  const [newFieldLat, setNewFieldLat] = useState('')
+  const [newFieldLon, setNewFieldLon] = useState('')
   const [fieldError, setFieldError] = useState('')
   const [locationSetupOpen, setLocationSetupOpen] = useState(false)
   const [locationAddress, setLocationAddress] = useState('')
@@ -368,6 +513,40 @@ function AppRoot() {
     }
   }, [showTour, session?.userId, activeField?.id])
 
+  useEffect(() => {
+    if (!session?.userId || !activeField?.id) return
+    const scopedKey = toScopedStorageKey(session.userId, activeField.id, PROFILE_STORAGE_KEY)
+    let parsed = null
+    try {
+      const raw = localStorage.getItem(scopedKey)
+      parsed = raw ? JSON.parse(raw) : null
+    } catch {
+      parsed = null
+    }
+    const fieldAddress =
+      typeof parsed?.address === 'string'
+        ? parsed.address
+        : typeof activeField.address === 'string'
+          ? activeField.address
+          : ''
+    const fieldLat =
+      typeof parsed?.latitude === 'number'
+        ? parsed.latitude
+        : typeof activeField?.manualLocation?.latitude === 'number'
+          ? activeField.manualLocation.latitude
+          : null
+    const fieldLon =
+      typeof parsed?.longitude === 'number'
+        ? parsed.longitude
+        : typeof activeField?.manualLocation?.longitude === 'number'
+          ? activeField.manualLocation.longitude
+          : null
+    setLocationAddress(fieldAddress)
+    setLocationLat(fieldLat == null ? '' : String(fieldLat))
+    setLocationLon(fieldLon == null ? '' : String(fieldLon))
+    setLocationResolveError('')
+  }, [session?.userId, activeField?.id, activeField?.address, activeField?.manualLocation?.latitude, activeField?.manualLocation?.longitude])
+
   const handleTourClose = useCallback(() => {
     if (user?.id) markTourCompleted(user.id)
     setShowTour(false)
@@ -377,19 +556,47 @@ function AppRoot() {
 
   function switchField(fieldId) {
     if (!session?.userId) return
+    if (!fieldId || fieldId === activeField?.id) return
     setUserActiveField(session.userId, fieldId)
     const nextUser = getUserById(session.userId)
     const nextField = (Array.isArray(nextUser?.fields) ? nextUser.fields : []).find((f) => f.id === fieldId)
-    if (nextField) ensureScopedProfileSeed(session.userId, nextField)
+    if (nextField) {
+      ensureScopedProfileSeed(session.userId, nextField)
+      syncScopedProfileFromField(session.userId, nextField)
+      const nextAddress = typeof nextField.address === 'string' ? nextField.address : ''
+      const nextLat =
+        typeof nextField?.manualLocation?.latitude === 'number'
+          ? String(nextField.manualLocation.latitude)
+          : ''
+      const nextLon =
+        typeof nextField?.manualLocation?.longitude === 'number'
+          ? String(nextField.manualLocation.longitude)
+          : ''
+      setLocationAddress(nextAddress)
+      setLocationLat(nextLat)
+      setLocationLon(nextLon)
+      setLocationResolveError('')
+      setLocationSetupOpen(false)
+    }
     setUserRefreshSeq((x) => x + 1)
+    // Force fresh boot on selected field scope so stale previous-field location cannot persist.
+    window.setTimeout(() => {
+      window.location.reload()
+    }, 60)
   }
 
   async function createField() {
     if (!session?.userId) return
     setFieldError('')
     try {
-      let manualLocation = {}
-      if (newFieldAddress.trim()) {
+      let manualLocation = {
+        latitude: parseNumberOrNull(newFieldLat),
+        longitude: parseNumberOrNull(newFieldLon),
+      }
+      if (
+        newFieldAddress.trim() &&
+        !(typeof manualLocation.latitude === 'number' && typeof manualLocation.longitude === 'number')
+      ) {
         try {
           const geo = await geocodeFieldAddress(newFieldAddress)
           manualLocation = { latitude: geo.latitude, longitude: geo.longitude }
@@ -415,9 +622,105 @@ function AppRoot() {
       setNewFieldSizeValue('')
       setNewFieldSizeUnit('ha')
       setNewFieldAddress('')
+      setNewFieldLat('')
+      setNewFieldLon('')
     } catch (err) {
       setFieldError(err?.message ? String(err.message) : String(err))
     }
+  }
+
+  function startEditField() {
+    if (!activeField) return
+    setEditingFieldId(activeField.id)
+    setShowAddField(true)
+    setFieldError('')
+    setNewFieldName(activeField.name || '')
+    setNewFieldSoilType(activeField.soilType || 'loam')
+    setNewFieldSizeValue(
+      typeof activeField.fieldSize?.value === 'number' ? String(activeField.fieldSize.value) : ''
+    )
+    setNewFieldSizeUnit(activeField.fieldSize?.unit === 'sqm' ? 'sqm' : 'ha')
+    setNewFieldAddress(typeof activeField.address === 'string' ? activeField.address : '')
+    setNewFieldLat(
+      typeof activeField?.manualLocation?.latitude === 'number'
+        ? String(activeField.manualLocation.latitude)
+        : ''
+    )
+    setNewFieldLon(
+      typeof activeField?.manualLocation?.longitude === 'number'
+        ? String(activeField.manualLocation.longitude)
+        : ''
+    )
+  }
+
+  async function saveEditedField() {
+    if (!session?.userId || !editingFieldId) return
+    setFieldError('')
+    try {
+      let manualLocation = {
+        latitude: parseNumberOrNull(newFieldLat),
+        longitude: parseNumberOrNull(newFieldLon),
+      }
+      if (
+        newFieldAddress.trim() &&
+        !(typeof manualLocation.latitude === 'number' && typeof manualLocation.longitude === 'number')
+      ) {
+        try {
+          const geo = await geocodeFieldAddress(newFieldAddress)
+          manualLocation = { latitude: geo.latitude, longitude: geo.longitude }
+        } catch (err) {
+          setFieldError(err?.message ? String(err.message) : String(err))
+        }
+      }
+      const updated = updateUserField(session.userId, editingFieldId, {
+        name: newFieldName,
+        soilType: newFieldSoilType,
+        fieldSize: {
+          value: parseNumberOrNull(newFieldSizeValue),
+          unit: newFieldSizeUnit,
+        },
+        address: newFieldAddress,
+        manualLocation,
+      })
+      if (!updated) throw new Error('Unable to update field.')
+      ensureScopedProfileSeed(session.userId, updated)
+      syncScopedProfileFromField(session.userId, updated)
+      if (activeField?.id === editingFieldId) {
+        await saveScopedLocation({
+          latitude: manualLocation.latitude,
+          longitude: manualLocation.longitude,
+          address: newFieldAddress,
+        })
+      }
+      setUserRefreshSeq((x) => x + 1)
+      setShowAddField(false)
+      setEditingFieldId('')
+      setNewFieldName('')
+      setNewFieldSoilType('loam')
+      setNewFieldSizeValue('')
+      setNewFieldSizeUnit('ha')
+      setNewFieldAddress('')
+      setNewFieldLat('')
+      setNewFieldLon('')
+    } catch (err) {
+      setFieldError(err?.message ? String(err.message) : String(err))
+    }
+  }
+
+  function removeActiveField() {
+    if (!session?.userId || !activeField?.id) return
+    if (!window.confirm(`Delete field "${activeField.name}"? This cannot be undone.`)) return
+    const removed = deleteUserField(session.userId, activeField.id)
+    if (!removed) return
+    clearScopedFieldStorage(session.userId, activeField.id)
+    setShowAddField(false)
+    setEditingFieldId('')
+    setFieldError('')
+    setLocationAddress('')
+    setLocationLat('')
+    setLocationLon('')
+    setLocationResolveError('')
+    setUserRefreshSeq((x) => x + 1)
   }
 
   if (!session?.userId) {
@@ -428,21 +731,44 @@ function AppRoot() {
     return <FirstFieldSetup session={session} onDone={() => setUserRefreshSeq((x) => x + 1)} />
   }
 
-  function saveScopedLocation(next) {
+  async function saveScopedLocation(next) {
     if (!session?.userId || !activeField?.id) return
-    const scopedKey = toScopedStorageKey(session.userId, activeField.id, PROFILE_STORAGE_KEY)
     try {
-      const raw = localStorage.getItem(scopedKey)
+      let latitude = typeof next?.latitude === 'number' ? next.latitude : null
+      let longitude = typeof next?.longitude === 'number' ? next.longitude : null
+      const trimmedAddress = typeof next?.address === 'string' ? next.address.trim() : ''
+      if (!(typeof latitude === 'number' && typeof longitude === 'number') && trimmedAddress) {
+        try {
+          setIsResolvingLocationAddress(true)
+          const geo = await geocodeFieldAddress(trimmedAddress)
+          latitude = geo.latitude
+          longitude = geo.longitude
+        } catch (err) {
+          // Keep manual save possible even if geocoding provider fails.
+          setLocationResolveError(err?.message ? String(err.message) : String(err))
+        } finally {
+          setIsResolvingLocationAddress(false)
+        }
+      }
+      // This function is called from inside ScopedAppStorage, so use the base key.
+      // The scoped storage wrapper will map it to the active field automatically.
+      const raw = localStorage.getItem(PROFILE_STORAGE_KEY)
       const base = raw ? JSON.parse(raw) : {}
       const payload = {
         ...base,
-        address: typeof next.address === 'string' ? next.address : base?.address || '',
-        latitude: next.latitude,
-        longitude: next.longitude,
+        address: trimmedAddress || base?.address || '',
+        latitude,
+        longitude,
         updatedAt: new Date().toISOString(),
       }
-      localStorage.setItem(scopedKey, JSON.stringify(payload))
-      updateFieldLocation(session.userId, activeField.id, next)
+      localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(payload))
+      updateFieldLocation(session.userId, activeField.id, {
+        address: payload.address,
+        latitude: payload.latitude,
+        longitude: payload.longitude,
+      })
+      setLocationLat(payload.latitude == null ? '' : String(payload.latitude))
+      setLocationLon(payload.longitude == null ? '' : String(payload.longitude))
       setUserRefreshSeq((x) => x + 1)
       setLocationSetupOpen(false)
     } catch {
@@ -472,6 +798,7 @@ function AppRoot() {
               type="button"
               className="btn btn-ghost"
               onClick={() => {
+                sessionStorage.setItem(AUTH_SKIP_AUTOLOGIN_ONCE_KEY, '1')
                 logoutSession()
                 setSession(null)
               }}
@@ -479,6 +806,28 @@ function AppRoot() {
               {tl('auth.logout', 'Logout')}
             </button>
           </div>
+          {activeField ? (
+            <section
+              style={{
+                border: '1px solid rgba(26, 67, 50, 0.14)',
+                borderRadius: 12,
+                padding: 10,
+                background: 'rgba(124, 166, 137, 0.05)',
+              }}
+            >
+              <p className="field-label" style={{ marginBottom: 8 }}>
+                {activeField.name}
+              </p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button type="button" className="btn btn-ghost btn-inline" onClick={startEditField}>
+                  {tl('fields.editField', 'Edit Field')}
+                </button>
+                <button type="button" className="btn btn-ghost btn-inline" onClick={removeActiveField}>
+                  {tl('fields.deleteField', 'Delete Field')}
+                </button>
+              </div>
+            </section>
+          ) : null}
           {!fields.length ? (
             <p className="muted">{tl('fields.emptyState', 'No fields yet. Add your first field to start.')}</p>
           ) : null}
@@ -513,12 +862,38 @@ function AppRoot() {
                 <span className="field-label">{tl('fields.fieldAddress', 'Field Address')}</span>
                 <input className="field-input" value={newFieldAddress} onChange={(e) => setNewFieldAddress(e.target.value)} />
               </label>
+              <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))' }}>
+                <label className="field" style={{ margin: 0 }}>
+                  <span className="field-label">{tl('fields.manualLatitude', 'Manual Latitude')}</span>
+                  <input className="field-input" value={newFieldLat} onChange={(e) => setNewFieldLat(e.target.value)} inputMode="decimal" />
+                </label>
+                <label className="field" style={{ margin: 0 }}>
+                  <span className="field-label">{tl('fields.manualLongitude', 'Manual Longitude')}</span>
+                  <input className="field-input" value={newFieldLon} onChange={(e) => setNewFieldLon(e.target.value)} inputMode="decimal" />
+                </label>
+              </div>
               {fieldError ? <pre className="error-pre">{fieldError}</pre> : null}
               <div className="key-actions">
-                <button type="button" className="btn btn-primary" onClick={() => void createField()}>
-                  {tl('fields.saveField', 'Save Field')}
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => (editingFieldId ? void saveEditedField() : void createField())}
+                >
+                  {editingFieldId ? tl('fields.updateField', 'Update Field') : tl('fields.saveField', 'Save Field')}
                 </button>
-                <button type="button" className="btn btn-ghost" onClick={() => setShowAddField(false)}>
+                {editingFieldId ? (
+                  <button type="button" className="btn btn-ghost" onClick={removeActiveField}>
+                    {tl('fields.deleteField', 'Delete Field')}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => {
+                    setShowAddField(false)
+                    setEditingFieldId('')
+                  }}
+                >
                   {tl('common.cancel', 'Cancel')}
                 </button>
               </div>
@@ -581,7 +956,7 @@ function AppRoot() {
                           .then((geo) => {
                             setLocationLat(String(geo.latitude))
                             setLocationLon(String(geo.longitude))
-                            saveScopedLocation({
+                            void saveScopedLocation({
                               latitude: geo.latitude,
                               longitude: geo.longitude,
                               address: locationAddress,
@@ -599,14 +974,14 @@ function AppRoot() {
                       type="button"
                       className="btn btn-primary"
                       onClick={() =>
-                        saveScopedLocation({
+                        void saveScopedLocation({
                           latitude: parseNumberOrNull(locationLat),
                           longitude: parseNumberOrNull(locationLon),
                           address: locationAddress,
                         })
                       }
                     >
-                      {tl('fields.saveField', 'Save Field')}
+                      {tl('fields.updateLocation', 'Update Location')}
                     </button>
                   </div>
                 </div>

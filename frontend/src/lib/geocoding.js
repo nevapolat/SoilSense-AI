@@ -9,38 +9,97 @@ function simplifyAddress(input) {
     .trim()
 }
 
+function tokenize(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s,.-]/gu, ' ')
+    .split(/[\s,.-]+/)
+    .map((x) => x.trim())
+    .filter((x) => x.length >= 2)
+}
+
+function scoreCandidate(queryTokens, label, focusFields = []) {
+  const lowerLabel = String(label || '').toLowerCase()
+  const focus = focusFields.map((x) => String(x || '').toLowerCase()).join(' ')
+  let score = 0
+
+  for (const token of queryTokens) {
+    if (focus.includes(token)) score += 6
+    else if (lowerLabel.includes(token)) score += 3
+  }
+
+  // Reward strong city-level exact matches.
+  if (queryTokens.some((t) => focus === t || focus.startsWith(`${t} `) || focus.endsWith(` ${t}`))) score += 8
+  return score
+}
+
+function pickBestCandidate(query, candidates) {
+  const queryTokens = tokenize(query)
+  if (!queryTokens.length) return candidates[0] || null
+  let best = null
+  let bestScore = -1
+  for (const c of candidates) {
+    const score = scoreCandidate(queryTokens, c.label, c.focusFields)
+    if (score > bestScore) {
+      best = c
+      bestScore = score
+    }
+  }
+  return best
+}
+
 async function tryOpenMeteoLookup(query) {
   const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
     query
-  )}&count=5&language=en&format=json`
+  )}&count=10&language=en&format=json`
   const res = await fetch(url)
   if (!res.ok) throw new Error(`Address lookup failed: HTTP ${res.status}`)
   const data = await res.json()
-  const best = Array.isArray(data?.results) ? data.results[0] : null
-  if (!best || typeof best.latitude !== 'number' || typeof best.longitude !== 'number') return null
-  return {
-    latitude: best.latitude,
-    longitude: best.longitude,
-    label: [best.name, best.admin1, best.country].filter(Boolean).join(', '),
-  }
+  const results = Array.isArray(data?.results) ? data.results : []
+  const candidates = results
+    .filter((best) => typeof best?.latitude === 'number' && typeof best?.longitude === 'number')
+    .map((best) => ({
+      latitude: best.latitude,
+      longitude: best.longitude,
+      label: [best.name, best.admin1, best.country].filter(Boolean).join(', '),
+      focusFields: [best.name, best.admin1, best.admin2, best.country],
+    }))
+  const best = pickBestCandidate(query, candidates)
+  return best || null
 }
 
 async function tryNominatimLookup(query) {
   const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(
     query
-  )}&limit=1`
+  )}&limit=8&addressdetails=1`
   const res = await fetch(url)
   if (!res.ok) return null
   const data = await res.json()
-  const best = Array.isArray(data) ? data[0] : null
-  const latitude = Number(best?.lat)
-  const longitude = Number(best?.lon)
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
-  return {
-    latitude,
-    longitude,
-    label: String(best?.display_name || query),
-  }
+  const rows = Array.isArray(data) ? data : []
+  const candidates = rows
+    .map((best) => {
+      const latitude = Number(best?.lat)
+      const longitude = Number(best?.lon)
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
+      const addr = best?.address && typeof best.address === 'object' ? best.address : {}
+      return {
+        latitude,
+        longitude,
+        label: String(best?.display_name || query),
+        focusFields: [
+          addr.city,
+          addr.town,
+          addr.village,
+          addr.county,
+          addr.state,
+          addr.country,
+          best?.name,
+        ],
+      }
+    })
+    .filter(Boolean)
+  const best = pickBestCandidate(query, candidates)
+  return best || null
 }
 
 export async function geocodeFieldAddress(address) {

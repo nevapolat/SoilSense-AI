@@ -2,6 +2,10 @@ const SHARED_KEYS = new Set([
   'soilsense.lang',
   'soilsense.auth.db.v1',
   'soilsense.auth.session.v1',
+  'soilsense.auth.deviceId.v1',
+  'soilsense.auth.rememberedEmail.v1',
+  'soilsense.auth.rememberedPassword.v1',
+  'soilsense.auth.reset.v1',
 ])
 
 export function getStorageScopePrefix(userId, fieldId) {

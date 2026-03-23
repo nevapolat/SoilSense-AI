@@ -3,6 +3,7 @@ const AUTH_SESSION_KEY = 'soilsense.auth.session.v1'
 const AUTH_RESET_KEY = 'soilsense.auth.reset.v1'
 const DEVICE_ID_KEY = 'soilsense.auth.deviceId.v1'
 const AUTH_REMEMBERED_EMAIL_KEY = 'soilsense.auth.rememberedEmail.v1'
+const AUTH_REMEMBERED_PASSWORD_KEY = 'soilsense.auth.rememberedPassword.v1'
 
 function toBase64(bytes) {
   let binary = ''
@@ -46,6 +47,24 @@ function setRememberedEmail(email) {
 
 function clearRememberedEmail() {
   localStorage.removeItem(AUTH_REMEMBERED_EMAIL_KEY)
+}
+
+function setRememberedPassword(password) {
+  const raw = String(password || '')
+  if (!raw) return
+  localStorage.setItem(AUTH_REMEMBERED_PASSWORD_KEY, raw)
+}
+
+function clearRememberedPassword() {
+  localStorage.removeItem(AUTH_REMEMBERED_PASSWORD_KEY)
+}
+
+export function getRememberedPassword() {
+  try {
+    return String(localStorage.getItem(AUTH_REMEMBERED_PASSWORD_KEY) || '')
+  } catch {
+    return ''
+  }
 }
 
 export function getRememberedEmail() {
@@ -110,6 +129,8 @@ async function buildPasswordRecord(password) {
 }
 
 async function verifyPassword(password, record) {
+  // Backward compatibility: older builds may have stored password as plain string.
+  if (typeof record === 'string') return String(password || '') === record
   if (!record?.salt || !record?.hash) return false
   const computed = await hashPassword(password, record.salt, record.iterations || 120000)
   return computed === record.hash
@@ -146,8 +167,13 @@ export async function signUpWithEmail({ email, password, rememberMe }) {
     createdAt: new Date().toISOString(),
   }
   persistSession(session)
-  if (rememberMe) setRememberedEmail(normalizedEmail)
-  else clearRememberedEmail()
+  if (rememberMe) {
+    setRememberedEmail(normalizedEmail)
+    setRememberedPassword(password)
+  } else {
+    clearRememberedEmail()
+    clearRememberedPassword()
+  }
   return session
 }
 
@@ -160,14 +186,22 @@ export async function loginWithEmail({ email, password, rememberMe }) {
   const deviceId = getDeviceId()
   const trusted = Array.isArray(user.trustedDeviceIds) && user.trustedDeviceIds.includes(deviceId)
   const needsPassword = !rememberMe || !trusted
+  const passwordCandidate = String(password || '') || (rememberMe ? getRememberedPassword() : '')
   if (needsPassword) {
-    const ok = await verifyPassword(password, user.password)
+    if (!String(passwordCandidate || '')) {
+      throw new Error('Password is required for this device.')
+    }
+    const ok = await verifyPassword(passwordCandidate, user.password)
     if (!ok) throw new Error('Invalid email or password.')
+    // Migrate legacy plain-text password record on successful login.
+    if (typeof user.password === 'string') {
+      user.password = await buildPasswordRecord(passwordCandidate)
+    }
     if (rememberMe) {
       user.trustedDeviceIds = Array.isArray(user.trustedDeviceIds) ? user.trustedDeviceIds : []
       if (!user.trustedDeviceIds.includes(deviceId)) user.trustedDeviceIds.push(deviceId)
-      saveDb(db)
     }
+    saveDb(db)
   }
   const session = {
     userId: user.id,
@@ -175,8 +209,13 @@ export async function loginWithEmail({ email, password, rememberMe }) {
     createdAt: new Date().toISOString(),
   }
   persistSession(session)
-  if (rememberMe) setRememberedEmail(normalizedEmail)
-  else clearRememberedEmail()
+  if (rememberMe) {
+    setRememberedEmail(normalizedEmail)
+    if (passwordCandidate) setRememberedPassword(passwordCandidate)
+  } else {
+    clearRememberedEmail()
+    clearRememberedPassword()
+  }
   return session
 }
 
@@ -264,6 +303,64 @@ export function updateFieldLocation(userId, fieldId, input) {
   if (typeof input?.address === 'string' && input.address.trim()) field.address = input.address.trim()
   saveDb(db)
   return field
+}
+
+export function updateUserField(userId, fieldId, fieldInput) {
+  const db = loadDb()
+  const user = db.users.find((u) => u.id === userId)
+  if (!user || !Array.isArray(user.fields)) return null
+  const field = user.fields.find((f) => f.id === fieldId)
+  if (!field) return null
+
+  const fieldName = String(fieldInput?.name || '').trim()
+  if (fieldName) field.name = fieldName
+  if (typeof fieldInput?.soilType === 'string' && fieldInput.soilType.trim()) {
+    field.soilType = fieldInput.soilType.trim()
+  }
+  if (fieldInput?.fieldSize && typeof fieldInput.fieldSize === 'object') {
+    field.fieldSize = {
+      value: typeof fieldInput.fieldSize.value === 'number' ? fieldInput.fieldSize.value : null,
+      unit: fieldInput.fieldSize.unit === 'sqm' ? 'sqm' : 'ha',
+    }
+  }
+  if (typeof fieldInput?.address === 'string') {
+    field.address = fieldInput.address.trim()
+  }
+  if (fieldInput?.manualLocation && typeof fieldInput.manualLocation === 'object') {
+    field.manualLocation = {
+      latitude:
+        typeof fieldInput.manualLocation.latitude === 'number'
+          ? fieldInput.manualLocation.latitude
+          : null,
+      longitude:
+        typeof fieldInput.manualLocation.longitude === 'number'
+          ? fieldInput.manualLocation.longitude
+          : null,
+    }
+  }
+
+  field.updatedAt = new Date().toISOString()
+  saveDb(db)
+  return field
+}
+
+export function deleteUserField(userId, fieldId) {
+  const db = loadDb()
+  const user = db.users.find((u) => u.id === userId)
+  if (!user || !Array.isArray(user.fields)) return null
+
+  const prevFields = user.fields
+  const nextFields = prevFields.filter((f) => f.id !== fieldId)
+  if (nextFields.length === prevFields.length) return null
+
+  user.fields = nextFields
+  if (user.activeFieldId === fieldId) {
+    user.activeFieldId = nextFields[0]?.id || null
+  } else if (user.activeFieldId && !nextFields.some((f) => f.id === user.activeFieldId)) {
+    user.activeFieldId = nextFields[0]?.id || null
+  }
+  saveDb(db)
+  return { deletedFieldId: fieldId, nextActiveFieldId: user.activeFieldId }
 }
 
 function loadResetRequests() {

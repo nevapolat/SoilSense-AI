@@ -125,23 +125,27 @@ export function buildFieldPlan({ profile, climateZoneHint, activityImpact }) {
   const totalPesticideToleranceL = Number(dosageByCrop.reduce((sum, x) => sum + x.pesticideToleranceL, 0).toFixed(2))
 
   const compatibilityWarnings = []
+  const compatibilityWarningCodes = []
   for (let i = 0; i < selectedCrops.length; i += 1) {
     for (let j = i + 1; j < selectedCrops.length; j += 1) {
       const a = selectedCrops[i]
       const b = selectedCrops[j]
       if (a.antagonists.includes(b.id) || b.antagonists.includes(a.id)) {
         compatibilityWarnings.push(`${a.name} and ${b.name} should be separated`)
+        compatibilityWarningCodes.push({ code: 'separate-crops', cropAId: a.id, cropBId: b.id })
       }
     }
   }
 
   const companionPairs = []
+  const companionPairIds = []
   for (let i = 0; i < selectedCrops.length; i += 1) {
     for (let j = i + 1; j < selectedCrops.length; j += 1) {
       const a = selectedCrops[i]
       const b = selectedCrops[j]
       if (a.companions.includes(b.id) || b.companions.includes(a.id)) {
         companionPairs.push(`${a.name} + ${b.name}`)
+        companionPairIds.push({ cropAId: a.id, cropBId: b.id })
       }
     }
   }
@@ -151,6 +155,8 @@ export function buildFieldPlan({ profile, climateZoneHint, activityImpact }) {
 
   const spacingPlan = {
     averageRowSpacingM: Number(averageRowSpacing.toFixed(2)),
+    recommendedRowSpacingM: Number(averageRowSpacing.toFixed(1)),
+    guidanceMode: averageRowSpacing >= 2 ? 'wide' : 'exact',
     rowGuidance:
       averageRowSpacing >= 2
         ? 'Leave around 2 meters between rows for airflow and access.'
@@ -165,15 +171,19 @@ export function buildFieldPlan({ profile, climateZoneHint, activityImpact }) {
 
   const pesticideAppliedL = typeof activityImpact?.chemicalPesticideLiters === 'number' ? activityImpact.chemicalPesticideLiters : 0
   const safetyWarnings = []
+  const safetyWarningCodes = []
   if (pesticideAppliedL > totalPesticideToleranceL && selectedCrops.length > 0) {
     safetyWarnings.push('Pesticide usage is above crop tolerance threshold for this field context.')
+    safetyWarningCodes.push('pesticide-over-tolerance')
   }
 
   if (!profile?.equipment?.sprinkler && !profile?.equipment?.dripIrrigation) {
     safetyWarnings.push('No irrigation equipment detected; prioritize drought-resilient scheduling.')
+    safetyWarningCodes.push('no-irrigation-equipment')
   }
   if (typeof profile?.workforce === 'number' && profile.workforce < 1 && areaHa > 1) {
     safetyWarnings.push('Workforce may be insufficient for the current field size.')
+    safetyWarningCodes.push('insufficient-workforce')
   }
 
   return {
@@ -192,10 +202,19 @@ export function buildFieldPlan({ profile, climateZoneHint, activityImpact }) {
       byCrop: dosageByCrop,
     },
     compatibility: {
+      companionPairIds: uniq(companionPairIds.map((x) => `${x.cropAId}:${x.cropBId}`)).map((entry) => {
+        const [cropAId, cropBId] = String(entry).split(':')
+        return { cropAId, cropBId }
+      }),
       companionPairs: uniq(companionPairs),
+      warningCodes: uniq(compatibilityWarningCodes.map((x) => `${x.code}:${x.cropAId}:${x.cropBId}`)).map((entry) => {
+        const [code, cropAId, cropBId] = String(entry).split(':')
+        return { code, cropAId, cropBId }
+      }),
       warnings: uniq(compatibilityWarnings),
     },
     spacing: spacingPlan,
+    safetyWarningCodes: uniq(safetyWarningCodes),
     safetyWarnings: uniq(safetyWarnings),
   }
 }
