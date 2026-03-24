@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node -e \"require('fs').writeFileSync('dist/_redirects', '/* /index.html 200' + String.fromCharCode(10))\"",
     "lint": "eslint .",
     "preview": "vite preview"
   },
