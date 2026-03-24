@@ -1,9 +1,46 @@
 const AUTH_DB_KEY = 'soilsense.auth.db.v1'
+const AUTH_DB_MIRROR_KEY = 'soilsense.auth.db.mirror.v1'
 const AUTH_SESSION_KEY = 'soilsense.auth.session.v1'
 const AUTH_RESET_KEY = 'soilsense.auth.reset.v1'
 const DEVICE_ID_KEY = 'soilsense.auth.deviceId.v1'
 const AUTH_REMEMBERED_EMAIL_KEY = 'soilsense.auth.rememberedEmail.v1'
 const AUTH_REMEMBERED_PASSWORD_KEY = 'soilsense.auth.rememberedPassword.v1'
+
+/** Captured at module load before installScopedLocalStorage() replaces localStorage methods. */
+const W = typeof window !== 'undefined' ? window : null
+const nativeLocalGet = W?.localStorage?.getItem?.bind(W.localStorage)
+const nativeLocalSet = W?.localStorage?.setItem?.bind(W.localStorage)
+const nativeLocalRemove = W?.localStorage?.removeItem?.bind(W.localStorage)
+const nativeSessionGet = W?.sessionStorage?.getItem?.bind(W.sessionStorage)
+const nativeSessionSet = W?.sessionStorage?.setItem?.bind(W.sessionStorage)
+const nativeSessionRemove = W?.sessionStorage?.removeItem?.bind(W.sessionStorage)
+
+function authLocalGet(key) {
+  if (nativeLocalGet) return nativeLocalGet(key)
+  if (!W?.localStorage) return null
+  return Storage.prototype.getItem.call(W.localStorage, key)
+}
+function authLocalSet(key, value) {
+  if (nativeLocalSet) nativeLocalSet(key, value)
+  else if (W?.localStorage) Storage.prototype.setItem.call(W.localStorage, key, value)
+}
+function authLocalRemove(key) {
+  if (nativeLocalRemove) nativeLocalRemove(key)
+  else if (W?.localStorage) Storage.prototype.removeItem.call(W.localStorage, key)
+}
+function authSessionGet(key) {
+  if (nativeSessionGet) return nativeSessionGet(key)
+  if (!W?.sessionStorage) return null
+  return Storage.prototype.getItem.call(W.sessionStorage, key)
+}
+function authSessionSet(key, value) {
+  if (nativeSessionSet) nativeSessionSet(key, value)
+  else if (W?.sessionStorage) Storage.prototype.setItem.call(W.sessionStorage, key, value)
+}
+function authSessionRemove(key) {
+  if (nativeSessionRemove) nativeSessionRemove(key)
+  else if (W?.sessionStorage) Storage.prototype.removeItem.call(W.sessionStorage, key)
+}
 
 function toBase64(bytes) {
   let binary = ''
@@ -18,7 +55,7 @@ function fromBase64(value) {
   return bytes
 }
 
-function normalizeEmail(email) {
+export function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase()
 }
 
@@ -29,10 +66,10 @@ function makeId(prefix) {
 
 function getDeviceId() {
   try {
-    const existing = localStorage.getItem(DEVICE_ID_KEY)
+    const existing = authLocalGet(DEVICE_ID_KEY)
     if (existing) return existing
     const created = makeId('dev')
-    localStorage.setItem(DEVICE_ID_KEY, created)
+    authLocalSet(DEVICE_ID_KEY, created)
     return created
   } catch {
     return makeId('dev')
@@ -42,26 +79,26 @@ function getDeviceId() {
 function setRememberedEmail(email) {
   const normalized = normalizeEmail(email)
   if (!normalized) return
-  localStorage.setItem(AUTH_REMEMBERED_EMAIL_KEY, normalized)
+  authLocalSet(AUTH_REMEMBERED_EMAIL_KEY, normalized)
 }
 
 function clearRememberedEmail() {
-  localStorage.removeItem(AUTH_REMEMBERED_EMAIL_KEY)
+  authLocalRemove(AUTH_REMEMBERED_EMAIL_KEY)
 }
 
 function setRememberedPassword(password) {
   const raw = String(password || '')
   if (!raw) return
-  localStorage.setItem(AUTH_REMEMBERED_PASSWORD_KEY, raw)
+  authLocalSet(AUTH_REMEMBERED_PASSWORD_KEY, raw)
 }
 
 function clearRememberedPassword() {
-  localStorage.removeItem(AUTH_REMEMBERED_PASSWORD_KEY)
+  authLocalRemove(AUTH_REMEMBERED_PASSWORD_KEY)
 }
 
 export function getRememberedPassword() {
   try {
-    return String(localStorage.getItem(AUTH_REMEMBERED_PASSWORD_KEY) || '')
+    return String(authLocalGet(AUTH_REMEMBERED_PASSWORD_KEY) || '')
   } catch {
     return ''
   }
@@ -69,28 +106,87 @@ export function getRememberedPassword() {
 
 export function getRememberedEmail() {
   try {
-    return normalizeEmail(localStorage.getItem(AUTH_REMEMBERED_EMAIL_KEY) || '')
+    return normalizeEmail(authLocalGet(AUTH_REMEMBERED_EMAIL_KEY) || '')
   } catch {
     return ''
   }
 }
 
 function loadDb() {
+  let users = []
   try {
-    const raw = localStorage.getItem(AUTH_DB_KEY)
-    if (!raw) return { users: [] }
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return { users: [] }
-    return {
-      users: Array.isArray(parsed.users) ? parsed.users : [],
+    const raw = authLocalGet(AUTH_DB_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object' && Array.isArray(parsed.users)) {
+        users = parsed.users
+      }
     }
   } catch {
-    return { users: [] }
+    users = []
   }
+
+  if (users.length === 0) {
+    try {
+      const mirrorRaw = authSessionGet(AUTH_DB_MIRROR_KEY)
+      if (mirrorRaw) {
+        const parsed = JSON.parse(mirrorRaw)
+        if (parsed && typeof parsed === 'object' && Array.isArray(parsed.users) && parsed.users.length > 0) {
+          users = parsed.users
+          try {
+            authLocalSet(AUTH_DB_KEY, JSON.stringify({ users }))
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Recover accounts that were written under scoped keys before shared-key bypass existed.
+  if (users.length === 0) {
+    const merged = new Map()
+    try {
+      const ls = window.localStorage
+      for (let i = 0; i < ls.length; i += 1) {
+        const k = ls.key(i)
+        if (typeof k !== 'string' || k === AUTH_DB_KEY) continue
+        if (!k.endsWith(AUTH_DB_KEY)) continue
+        const altRaw = authLocalGet(k)
+        if (!altRaw) continue
+        const altParsed = JSON.parse(altRaw)
+        const altUsers = Array.isArray(altParsed?.users) ? altParsed.users : []
+        for (const u of altUsers) {
+          const ne = normalizeEmail(u?.email)
+          if (ne && !merged.has(ne)) merged.set(ne, u)
+        }
+      }
+    } catch {
+      // ignore
+    }
+    if (merged.size > 0) {
+      users = [...merged.values()]
+      try {
+        authLocalSet(AUTH_DB_KEY, JSON.stringify({ users }))
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return { users }
 }
 
 function saveDb(db) {
-  localStorage.setItem(AUTH_DB_KEY, JSON.stringify(db))
+  const serialized = JSON.stringify(db)
+  authLocalSet(AUTH_DB_KEY, serialized)
+  try {
+    authSessionSet(AUTH_DB_MIRROR_KEY, serialized)
+  } catch {
+    // ignore (e.g. sessionStorage disabled)
+  }
 }
 
 function getUserByEmail(db, email) {
@@ -221,31 +317,44 @@ export async function loginWithEmail({ email, password, rememberMe }) {
 
 export function persistSession(session) {
   const serialized = JSON.stringify(session)
-  localStorage.removeItem(AUTH_SESSION_KEY)
-  sessionStorage.removeItem(AUTH_SESSION_KEY)
-  if (session?.rememberMe) localStorage.setItem(AUTH_SESSION_KEY, serialized)
-  else sessionStorage.setItem(AUTH_SESSION_KEY, serialized)
+  authLocalRemove(AUTH_SESSION_KEY)
+  authSessionRemove(AUTH_SESSION_KEY)
+  if (session?.rememberMe) authLocalSet(AUTH_SESSION_KEY, serialized)
+  else authSessionSet(AUTH_SESSION_KEY, serialized)
 }
 
 export function restoreSession() {
+  let session = null
   try {
-    const persistent = localStorage.getItem(AUTH_SESSION_KEY)
-    if (persistent) return JSON.parse(persistent)
+    const persistent = authLocalGet(AUTH_SESSION_KEY)
+    if (persistent) session = JSON.parse(persistent)
   } catch {
     // ignore
   }
-  try {
-    const temporary = sessionStorage.getItem(AUTH_SESSION_KEY)
-    if (temporary) return JSON.parse(temporary)
-  } catch {
-    // ignore
+  if (!session) {
+    try {
+      const temporary = authSessionGet(AUTH_SESSION_KEY)
+      if (temporary) session = JSON.parse(temporary)
+    } catch {
+      // ignore
+    }
   }
-  return null
+  if (!session?.userId) return null
+  const user = getUserById(session.userId)
+  if (!user) {
+    authLocalRemove(AUTH_SESSION_KEY)
+    authSessionRemove(AUTH_SESSION_KEY)
+    return null
+  }
+  return session
 }
 
 export function logoutSession() {
-  localStorage.removeItem(AUTH_SESSION_KEY)
-  sessionStorage.removeItem(AUTH_SESSION_KEY)
+  authLocalRemove(AUTH_SESSION_KEY)
+  authSessionRemove(AUTH_SESSION_KEY)
+  // Remember-me is for the login form only; clear it so logout always lands on a fresh login (no auto-login).
+  clearRememberedEmail()
+  clearRememberedPassword()
 }
 
 export function listUserFields(userId) {
@@ -365,7 +474,7 @@ export function deleteUserField(userId, fieldId) {
 
 function loadResetRequests() {
   try {
-    const raw = localStorage.getItem(AUTH_RESET_KEY)
+    const raw = authLocalGet(AUTH_RESET_KEY)
     const parsed = raw ? JSON.parse(raw) : []
     return Array.isArray(parsed) ? parsed : []
   } catch {
@@ -374,7 +483,7 @@ function loadResetRequests() {
 }
 
 function saveResetRequests(items) {
-  localStorage.setItem(AUTH_RESET_KEY, JSON.stringify(items))
+  authLocalSet(AUTH_RESET_KEY, JSON.stringify(items))
 }
 
 export function requestPasswordReset(email) {

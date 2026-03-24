@@ -18,6 +18,7 @@ import {
   restoreSession,
   getRememberedEmail,
   getRememberedPassword,
+  normalizeEmail,
   setUserActiveField,
   signUpWithEmail,
   updateUserField,
@@ -29,7 +30,6 @@ import { geocodeFieldAddress } from './lib/geocoding'
 const appLog = createLogger('app')
 const pwaLog = createLogger('pwa')
 const PROFILE_STORAGE_KEY = 'soilsense.profile'
-const AUTH_SKIP_AUTOLOGIN_ONCE_KEY = 'soilsense.auth.skipAutoLoginOnce.v1'
 
 function parseNumberOrNull(value) {
   const n = Number(String(value || '').trim())
@@ -171,6 +171,17 @@ function AuthScreen({ onAuthenticated }) {
     return v === key ? fallback : v
   }
 
+  function readAuthFormEmailPassword(form, stateEmail, statePassword) {
+    const emailEl = form?.elements?.namedItem('auth-email')
+    const passEl = form?.elements?.namedItem('auth-password')
+    const emailRaw = emailEl && 'value' in emailEl ? emailEl.value : stateEmail
+    const passRaw = passEl && 'value' in passEl ? passEl.value : statePassword
+    return {
+      email: normalizeEmail(emailRaw),
+      password: String(passRaw ?? ''),
+    }
+  }
+
   useEffect(() => {
     if (resetToken) setMode('reset')
   }, [resetToken])
@@ -183,12 +194,6 @@ function AuthScreen({ onAuthenticated }) {
 
   useEffect(() => {
     if (mode !== 'login' || autoLoginAttempted || !rememberMe) return
-    const shouldSkipOnce = sessionStorage.getItem(AUTH_SKIP_AUTOLOGIN_ONCE_KEY) === '1'
-    if (shouldSkipOnce) {
-      sessionStorage.removeItem(AUTH_SKIP_AUTOLOGIN_ONCE_KEY)
-      setAutoLoginAttempted(true)
-      return
-    }
     const emailCandidate = String(email || rememberedEmail || '').trim()
     const passwordCandidate = String(password || rememberedPassword || '')
     if (!emailCandidate || !passwordCandidate) return
@@ -197,8 +202,8 @@ function AuthScreen({ onAuthenticated }) {
     setErrorText('')
     void loginWithEmail({ email: emailCandidate, password: passwordCandidate, rememberMe: true })
       .then((session) => onAuthenticated(session))
-      .catch(() => {
-        // Keep user on login form if auto-login fails.
+      .catch((err) => {
+        setErrorText(err?.message ? String(err.message) : String(err))
       })
       .finally(() => setIsSubmitting(false))
   }, [
@@ -217,16 +222,25 @@ function AuthScreen({ onAuthenticated }) {
     setErrorText('')
     setIsSubmitting(true)
     try {
+      const { email: formEmail, password: formPassword } = readAuthFormEmailPassword(
+        event.currentTarget,
+        email,
+        password
+      )
+      if (formEmail) setEmail(formEmail)
+      if (mode === 'login' || mode === 'signup') {
+        if (formPassword) setPassword(formPassword)
+      }
       if (mode === 'reset') {
-        await resetPasswordWithToken(resetToken, password)
+        await resetPasswordWithToken(resetToken, formPassword)
         setMode('login')
         setPassword('')
         window.location.hash = ''
       } else if (mode === 'signup') {
-        const session = await signUpWithEmail({ email, password, rememberMe })
+        const session = await signUpWithEmail({ email: formEmail, password: formPassword, rememberMe: false })
         onAuthenticated(session)
       } else {
-        const session = await loginWithEmail({ email, password, rememberMe })
+        const session = await loginWithEmail({ email: formEmail, password: formPassword, rememberMe })
         onAuthenticated(session)
       }
     } catch (err) {
@@ -237,12 +251,15 @@ function AuthScreen({ onAuthenticated }) {
   }
 
   function onForgotPassword() {
-    const res = requestPasswordReset(email)
+    const el = typeof document !== 'undefined' ? document.getElementById('auth-email') : null
+    const raw = el && 'value' in el ? el.value : email
+    const addr = normalizeEmail(raw)
+    const res = requestPasswordReset(addr)
     setResetSentLink(res.link || '')
-    if (email && res.link) {
+    if (addr && res.link) {
       const subject = encodeURIComponent('SoilSense password reset link')
       const body = encodeURIComponent(`Use this link to reset your password:\n\n${res.link}`)
-      window.open(`mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`, '_blank')
+      window.open(`mailto:${encodeURIComponent(addr)}?subject=${subject}&body=${body}`, '_blank')
     }
   }
 
@@ -283,15 +300,28 @@ function AuthScreen({ onAuthenticated }) {
         </label>
         <label className="field">
           <span className="field-label">{tl('auth.email', 'Email')}</span>
-          <input className="field-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required={mode !== 'reset'} disabled={mode === 'reset'} />
+          <input
+            id="auth-email"
+            name="auth-email"
+            className="field-input"
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required={mode !== 'reset'}
+            disabled={mode === 'reset'}
+          />
         </label>
         {mode === 'login' ? (
           <>
             <label className="field">
               <span className="field-label">{tl('auth.password', 'Password')}</span>
               <input
+                id="auth-password"
+                name="auth-password"
                 className="field-input"
                 type="password"
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 minLength={8}
@@ -306,7 +336,17 @@ function AuthScreen({ onAuthenticated }) {
         ) : (
           <label className="field">
             <span className="field-label">{tl('auth.password', 'Password')}</span>
-            <input className="field-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} required />
+            <input
+              id="auth-password"
+              name="auth-password"
+              className="field-input"
+              type="password"
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              minLength={8}
+              required
+            />
           </label>
         )}
         {errorText ? <pre className="error-pre">{errorText}</pre> : null}
@@ -352,7 +392,7 @@ function AuthScreen({ onAuthenticated }) {
   )
 }
 
-function FirstFieldSetup({ session, onDone }) {
+function FirstFieldSetup({ session, onDone, onLogout }) {
   const { t } = useI18n()
   const [name, setName] = useState('')
   const [soilType, setSoilType] = useState('loam')
@@ -445,6 +485,11 @@ function FirstFieldSetup({ session, onDone }) {
           <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={isResolvingAddress}>
             {isResolvingAddress ? t('common.loading') : t('fields.saveField')}
           </button>
+          {typeof onLogout === 'function' ? (
+            <button type="button" className="btn btn-ghost" onClick={onLogout}>
+              {t('auth.logout') === 'auth.logout' ? 'Logout' : t('auth.logout')}
+            </button>
+          ) : null}
         </div>
       </div>
     </section>
@@ -476,6 +521,12 @@ function AppRoot() {
     const v = t(key)
     return v === key ? fallback : v
   }
+
+  const handleLogout = useCallback(() => {
+    logoutSession()
+    // Full reload ensures we leave the authenticated shell (scoped storage / PWA) and show the login UI reliably.
+    window.location.reload()
+  }, [])
 
   const user = useMemo(() => {
     if (!session?.userId) return null
@@ -728,7 +779,13 @@ function AppRoot() {
   }
 
   if (session?.userId && fields.length === 0) {
-    return <FirstFieldSetup session={session} onDone={() => setUserRefreshSeq((x) => x + 1)} />
+    return (
+      <FirstFieldSetup
+        session={session}
+        onDone={() => setUserRefreshSeq((x) => x + 1)}
+        onLogout={handleLogout}
+      />
+    )
   }
 
   async function saveScopedLocation(next) {
@@ -794,15 +851,7 @@ function AppRoot() {
             <button type="button" className="btn btn-primary" onClick={() => setShowAddField((v) => !v)}>
               {tl('fields.addField', 'Add Field')}
             </button>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => {
-                sessionStorage.setItem(AUTH_SKIP_AUTOLOGIN_ONCE_KEY, '1')
-                logoutSession()
-                setSession(null)
-              }}
-            >
+            <button type="button" className="btn btn-ghost" onClick={handleLogout}>
               {tl('auth.logout', 'Logout')}
             </button>
           </div>

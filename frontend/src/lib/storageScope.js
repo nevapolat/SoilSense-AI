@@ -16,16 +16,19 @@ export function toScopedStorageKey(userId, fieldId, key) {
   return `${getStorageScopePrefix(userId, fieldId)}${String(key)}`
 }
 
-function shouldScopeKey(key) {
-  return typeof key === 'string' && key.startsWith('soilsense.') && !SHARED_KEYS.has(key)
-}
-
 export function installScopedLocalStorage(scopePrefix) {
   if (!window?.localStorage || !scopePrefix) return () => {}
   const storage = window.localStorage
   const originalGetItem = storage.getItem.bind(storage)
   const originalSetItem = storage.setItem.bind(storage)
   const originalRemoveItem = storage.removeItem.bind(storage)
+
+  function shouldScopeKey(key) {
+    if (typeof key !== 'string' || !key.startsWith('soilsense.') || SHARED_KEYS.has(key)) return false
+    // Keys from toScopedStorageKey() already include the scope prefix — do not double-prefix.
+    if (key.startsWith(scopePrefix)) return false
+    return true
+  }
 
   function wrapKey(key) {
     return shouldScopeKey(key) ? `${scopePrefix}${key}` : key
