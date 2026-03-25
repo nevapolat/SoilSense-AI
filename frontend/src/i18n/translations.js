@@ -626,6 +626,12 @@ const translations = {
       resetSent: 'Reset link prepared for your email:',
       openResetLink: 'Open reset link',
     },
+    projectIntro: {
+      title: 'Welcome to SoilSense AI',
+      body:
+        'SoilSense AI helps you understand soil health, plan crops and compost, interpret plant scans, and track daily tasks for your fields—all in one place. Close this message to continue with a short tour of the app.',
+      close: 'Close',
+    },
     fields: {
       activeField: 'Active Field',
       myfFieldsTitle: 'My Fields',
@@ -1173,6 +1179,12 @@ const translations = {
       resetHint: 'Hesabınız için yeni bir şifre belirleyin.',
       resetSent: 'Şifre sıfırlama bağlantısı e-postanız için hazırlandı:',
       openResetLink: 'Sıfırlama bağlantısını aç',
+    },
+    projectIntro: {
+      title: "SoilSense AI'ye hoş geldiniz",
+      body:
+        'SoilSense AI, toprak sağlığınızı anlamanıza, ürün ve kompost planlamanıza, bitki taramalarını yorumlamanıza ve tarlalarınız için günlük görevleri takip etmenize yardımcı olur—hepsi tek yerde. Uygulama turuna geçmek için bu mesajı kapatın.',
+      close: 'Kapat',
     },
     fields: {
       activeField: 'Aktif Tarla',
@@ -1780,6 +1792,12 @@ const translations = {
       resetSent: 'Reset-Link für deine E-Mail wurde vorbereitet:',
       openResetLink: 'Reset-Link öffnen',
     },
+    projectIntro: {
+      title: 'Willkommen bei SoilSense AI',
+      body:
+        'SoilSense AI hilft Ihnen, die Bodengesundheit zu verstehen, Kulturen und Kompost zu planen, Pflanzen-Scans zu deuten und tägliche Aufgaben für Ihre Felder zu verfolgen—alles an einem Ort. Schließen Sie diese Meldung, um mit einer kurzen App-Tour fortzufahren.',
+      close: 'Schließen',
+    },
     fields: {
       activeField: 'Aktives Feld',
       myfFieldsTitle: 'Meine Felder',
@@ -2386,6 +2404,12 @@ const translations = {
       resetSent: 'Se preparó el enlace de restablecimiento para tu correo:',
       openResetLink: 'Abrir enlace de restablecimiento',
     },
+    projectIntro: {
+      title: 'Bienvenido a SoilSense AI',
+      body:
+        'SoilSense AI te ayuda a entender la salud del suelo, planificar cultivos y compost, interpretar escaneos de plantas y seguir tareas diarias para tus campos—todo en un solo lugar. Cierra este mensaje para continuar con un breve recorrido por la aplicación.',
+      close: 'Cerrar',
+    },
     fields: {
       activeField: 'Campo activo',
       myfFieldsTitle: 'Mis campos',
@@ -2987,6 +3011,12 @@ const translations = {
       resetHint: '请为你的账号设置新密码。',
       resetSent: '重置链接已为你的邮箱准备好：',
       openResetLink: '打开重置链接',
+    },
+    projectIntro: {
+      title: '欢迎使用 SoilSense AI',
+      body:
+        'SoilSense AI 帮助你了解土壤健康、规划作物与堆肥、解读植物扫描，并跟踪田地的日常任务——尽在一处。关闭此消息后，将继续进行简短的界面导览。',
+      close: '关闭',
     },
     fields: {
       activeField: '当前田块',

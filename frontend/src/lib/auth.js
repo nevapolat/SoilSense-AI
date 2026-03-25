@@ -88,6 +88,7 @@ function mergeStoredUserPayload(payload, userId) {
     email: email || normalizeEmail(p.email),
     password: null,
     hasCompletedTour: Boolean(p.hasCompletedTour),
+    hasSeenProjectIntro: Boolean(p.hasSeenProjectIntro),
     activeFieldId: typeof p.activeFieldId === 'string' || p.activeFieldId === null ? p.activeFieldId : null,
     fields: Array.isArray(p.fields) ? p.fields : [],
     trustedDeviceIds: Array.isArray(p.trustedDeviceIds) ? p.trustedDeviceIds : [],
@@ -124,6 +125,7 @@ async function defaultRemoteUser(uid, emailFromAuth) {
     email,
     password: null,
     hasCompletedTour: false,
+    hasSeenProjectIntro: false,
     activeFieldId: null,
     fields: [],
     trustedDeviceIds: [],
@@ -482,6 +484,7 @@ export async function signUpWithEmail({ email, password, rememberMe }) {
     email: normalizedEmail,
     password: passwordRecord,
     hasCompletedTour: false,
+    hasSeenProjectIntro: false,
     activeFieldId: null,
     fields: [],
     trustedDeviceIds: rememberMe ? [deviceId] : [],
@@ -778,5 +781,13 @@ export function markTourCompleted(userId) {
   const user = db.users.find((u) => u.id === userId)
   if (!user) return
   user.hasCompletedTour = true
+  saveDb(db)
+}
+
+export function markProjectIntroDismissed(userId) {
+  const db = loadDb()
+  const user = db.users.find((u) => u.id === userId)
+  if (!user) return
+  user.hasSeenProjectIntro = true
   saveDb(db)
 }

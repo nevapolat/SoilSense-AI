@@ -7,7 +7,7 @@ import I18nProvider from './i18n/I18nProvider.jsx'
 import { createLogger, normalizeErrorForLog } from './lib/logger'
 import GuideTour from './components/GuideTour.jsx'
 import { useI18n } from './i18n/useI18n'
-import { Globe2 } from 'lucide-react'
+import { Globe2, X } from 'lucide-react'
 import {
   addUserField,
   bootstrapAuth,
@@ -19,6 +19,7 @@ import {
   isRemoteAuthEnabled,
   loginWithEmail,
   logoutSession,
+  markProjectIntroDismissed,
   markTourCompleted,
   requestPasswordReset,
   resetPasswordWithToken,
@@ -640,10 +641,15 @@ function AppRoot() {
     })()
   }, [])
 
-  const user = useMemo(() => {
-    if (!session?.userId) return null
-    return getUserById(session.userId)
-  }, [session, userRefreshSeq])
+  const user = useMemo(
+    () => {
+      if (!session?.userId) return null
+      return getUserById(session.userId)
+    },
+    // userRefreshSeq bumps when profile mutates without changing session (tour, fields, etc.).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- need userRefreshSeq + session?.userId together
+    [session?.userId, userRefreshSeq],
+  )
 
   const fields = Array.isArray(user?.fields) ? user.fields : []
   const activeField =
@@ -668,12 +674,22 @@ function AppRoot() {
         ? `${activeField.manualLocation.latitude}, ${activeField.manualLocation.longitude}`
         : '—'
 
-  const shouldShowTour = Boolean(user && activeField && !user.hasCompletedTour)
+  const shouldShowProjectIntro = Boolean(
+    user && activeField && !user.hasSeenProjectIntro && !user.hasCompletedTour
+  )
+  const shouldShowTour = Boolean(
+    user && activeField && !user.hasCompletedTour && user.hasSeenProjectIntro
+  )
+  const [showProjectIntro, setShowProjectIntro] = useState(shouldShowProjectIntro)
   const [showTour, setShowTour] = useState(shouldShowTour)
 
   // Track current SoilSense tab so we can adjust surrounding layout.
   // Default to dashboard until SoilSenseApp reports otherwise.
   const [currentSoilSenseTab, setCurrentSoilSenseTab] = useState('dashboard')
+
+  useEffect(() => {
+    setShowProjectIntro(shouldShowProjectIntro)
+  }, [shouldShowProjectIntro, activeField?.id, user?.id])
 
   useEffect(() => {
     setShowTour(shouldShowTour)
@@ -686,6 +702,7 @@ function AppRoot() {
 
   useEffect(() => {
     if (showTour) return
+    if (!user?.hasSeenProjectIntro) return
     if (!session?.userId || !activeField?.id) return
     try {
       const scopedKey = toScopedStorageKey(session.userId, activeField.id, PROFILE_STORAGE_KEY)
@@ -696,7 +713,7 @@ function AppRoot() {
     } catch {
       setLocationSetupOpen(true)
     }
-  }, [showTour, session?.userId, activeField?.id])
+  }, [showTour, user?.hasSeenProjectIntro, session?.userId, activeField?.id])
 
   useEffect(() => {
     if (!session?.userId || !activeField?.id) return
@@ -731,6 +748,12 @@ function AppRoot() {
     setLocationLon(fieldLon == null ? '' : String(fieldLon))
     setLocationResolveError('')
   }, [session?.userId, activeField?.id, activeField?.address, activeField?.manualLocation?.latitude, activeField?.manualLocation?.longitude])
+
+  const handleProjectIntroClose = useCallback(() => {
+    if (user?.id) markProjectIntroDismissed(user.id)
+    setShowProjectIntro(false)
+    setUserRefreshSeq((x) => x + 1)
+  }, [user?.id])
 
   const handleTourClose = useCallback(() => {
     if (user?.id) markTourCompleted(user.id)
@@ -1026,6 +1049,111 @@ function AppRoot() {
     }
   }
 
+  function renderMyFieldForm() {
+    return (
+      <div style={{ display: 'grid', gap: 10 }}>
+        <label className="field" style={{ margin: 0 }}>
+          <span className="field-label">{tl('fields.fieldName', 'Field Name')}</span>
+          <input
+            className="field-input"
+            value={newFieldName}
+            onChange={(e) => setNewFieldName(e.target.value)}
+            placeholder={tl('fields.fieldNameExample', 'e.g., North Plot')}
+          />
+        </label>
+
+        <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))' }}>
+          <label className="field" style={{ margin: 0 }}>
+            <span className="field-label">{tl('profile.soilTypeLabel', 'Soil Type')}</span>
+            <select className="field-input" value={newFieldSoilType} onChange={(e) => setNewFieldSoilType(e.target.value)}>
+              <option value="loam">{t('profile.soilTypes.loam')}</option>
+              <option value="clay">{t('profile.soilTypes.clay')}</option>
+              <option value="sandy">{t('profile.soilTypes.sandy')}</option>
+              <option value="silty">{t('profile.soilTypes.silty')}</option>
+            </select>
+          </label>
+
+          <label className="field" style={{ margin: 0 }}>
+            <span className="field-label">{tl('profile.fieldSizeLabel', 'Field Size')}</span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                className="field-input"
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="any"
+                value={newFieldSizeValue}
+                onChange={(e) => setNewFieldSizeValue(e.target.value)}
+              />
+              <select
+                className="field-input"
+                value={newFieldSizeUnit}
+                onChange={(e) => setNewFieldSizeUnit(e.target.value)}
+                style={{ width: 100 }}
+              >
+                <option value="sqm">{t('profile.fieldSizeUnits.sqm')}</option>
+                <option value="ha">{t('profile.fieldSizeUnits.ha')}</option>
+              </select>
+            </div>
+          </label>
+        </div>
+
+        <label className="field" style={{ margin: 0 }}>
+          <span className="field-label">{tl('fields.fieldAddress', 'Field Address')}</span>
+          <input className="field-input" value={newFieldAddress} onChange={(e) => setNewFieldAddress(e.target.value)} />
+        </label>
+
+        <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))' }}>
+          <label className="field" style={{ margin: 0 }}>
+            <span className="field-label">{tl('fields.manualLatitude', 'Manual Latitude')}</span>
+            <input
+              className="field-input"
+              value={newFieldLat}
+              onChange={(e) => setNewFieldLat(e.target.value)}
+              inputMode="decimal"
+            />
+          </label>
+          <label className="field" style={{ margin: 0 }}>
+            <span className="field-label">{tl('fields.manualLongitude', 'Manual Longitude')}</span>
+            <input
+              className="field-input"
+              value={newFieldLon}
+              onChange={(e) => setNewFieldLon(e.target.value)}
+              inputMode="decimal"
+            />
+          </label>
+        </div>
+
+        {fieldError ? <pre className="error-pre">{fieldError}</pre> : null}
+
+        <div className="key-actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => (editingFieldId ? void saveEditedField() : void createField())}
+          >
+            {editingFieldId ? tl('fields.updateField', 'Update Field') : tl('fields.saveField', 'Save Field')}
+          </button>
+          {editingFieldId ? (
+            <button type="button" className="btn btn-ghost" onClick={removeActiveField}>
+              {tl('fields.deleteField', 'Delete Field')}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => {
+              setShowAddField(false)
+              setEditingFieldId('')
+            }}
+          >
+            {tl('common.cancel', 'Cancel')}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="app-session-layout">
       <div className="app-session-scroll">
@@ -1126,116 +1254,35 @@ function AppRoot() {
                 </label>
 
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <button type="button" className="btn btn-primary" onClick={() => setShowAddField((v) => !v)}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => {
+                      setShowAddField((v) => {
+                        const next = !v
+                        if (!next) {
+                          setEditingFieldId('')
+                        } else {
+                          setEditingFieldId('')
+                          setFieldError('')
+                          setNewFieldName('')
+                          setNewFieldSoilType('loam')
+                          setNewFieldSizeValue('')
+                          setNewFieldSizeUnit('ha')
+                          setNewFieldAddress('')
+                          setNewFieldLat('')
+                          setNewFieldLon('')
+                        }
+                        return next
+                      })
+                    }}
+                  >
                     {tl('fields.addField', 'Add Field')}
                   </button>
                 </div>
 
                 {!fields.length ? (
                   <p className="muted">{tl('fields.emptyState', 'No fields yet. Add your first field to start.')}</p>
-                ) : null}
-
-                {showAddField ? (
-                  <div style={{ display: 'grid', gap: 10 }}>
-                    <label className="field" style={{ margin: 0 }}>
-                      <span className="field-label">{tl('fields.fieldName', 'Field Name')}</span>
-                      <input
-                        className="field-input"
-                        value={newFieldName}
-                        onChange={(e) => setNewFieldName(e.target.value)}
-                        placeholder={tl('fields.fieldNameExample', 'e.g., North Plot')}
-                      />
-                    </label>
-
-                    <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))' }}>
-                      <label className="field" style={{ margin: 0 }}>
-                        <span className="field-label">{tl('profile.soilTypeLabel', 'Soil Type')}</span>
-                        <select className="field-input" value={newFieldSoilType} onChange={(e) => setNewFieldSoilType(e.target.value)}>
-                          <option value="loam">{t('profile.soilTypes.loam')}</option>
-                          <option value="clay">{t('profile.soilTypes.clay')}</option>
-                          <option value="sandy">{t('profile.soilTypes.sandy')}</option>
-                          <option value="silty">{t('profile.soilTypes.silty')}</option>
-                        </select>
-                      </label>
-
-                      <label className="field" style={{ margin: 0 }}>
-                        <span className="field-label">{tl('profile.fieldSizeLabel', 'Field Size')}</span>
-                        <div style={{ display: 'flex', gap: 8 }}>
-                          <input
-                            className="field-input"
-                            type="number"
-                            inputMode="decimal"
-                            min={0}
-                            step="any"
-                            value={newFieldSizeValue}
-                            onChange={(e) => setNewFieldSizeValue(e.target.value)}
-                          />
-                          <select
-                            className="field-input"
-                            value={newFieldSizeUnit}
-                            onChange={(e) => setNewFieldSizeUnit(e.target.value)}
-                            style={{ width: 100 }}
-                          >
-                            <option value="sqm">{t('profile.fieldSizeUnits.sqm')}</option>
-                            <option value="ha">{t('profile.fieldSizeUnits.ha')}</option>
-                          </select>
-                        </div>
-                      </label>
-                    </div>
-
-                    <label className="field" style={{ margin: 0 }}>
-                      <span className="field-label">{tl('fields.fieldAddress', 'Field Address')}</span>
-                      <input className="field-input" value={newFieldAddress} onChange={(e) => setNewFieldAddress(e.target.value)} />
-                    </label>
-
-                    <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))' }}>
-                      <label className="field" style={{ margin: 0 }}>
-                        <span className="field-label">{tl('fields.manualLatitude', 'Manual Latitude')}</span>
-                        <input
-                          className="field-input"
-                          value={newFieldLat}
-                          onChange={(e) => setNewFieldLat(e.target.value)}
-                          inputMode="decimal"
-                        />
-                      </label>
-                      <label className="field" style={{ margin: 0 }}>
-                        <span className="field-label">{tl('fields.manualLongitude', 'Manual Longitude')}</span>
-                        <input
-                          className="field-input"
-                          value={newFieldLon}
-                          onChange={(e) => setNewFieldLon(e.target.value)}
-                          inputMode="decimal"
-                        />
-                      </label>
-                    </div>
-
-                    {fieldError ? <pre className="error-pre">{fieldError}</pre> : null}
-
-                    <div className="key-actions">
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        onClick={() => (editingFieldId ? void saveEditedField() : void createField())}
-                      >
-                        {editingFieldId ? tl('fields.updateField', 'Update Field') : tl('fields.saveField', 'Save Field')}
-                      </button>
-                      {editingFieldId ? (
-                        <button type="button" className="btn btn-ghost" onClick={removeActiveField}>
-                          {tl('fields.deleteField', 'Delete Field')}
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        onClick={() => {
-                          setShowAddField(false)
-                          setEditingFieldId('')
-                        }}
-                      >
-                        {tl('common.cancel', 'Cancel')}
-                      </button>
-                    </div>
-                  </div>
                 ) : null}
               </div>
             </section>
@@ -1290,6 +1337,60 @@ function AppRoot() {
             hideWelcomeHeader
             onActiveTabChange={setCurrentSoilSenseTab}
           />
+          {showProjectIntro ? (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="project-intro-title"
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(0,0,0,0.25)',
+                zIndex: 2620,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 16,
+              }}
+            >
+              <section className="card" style={{ width: '100%', maxWidth: 520, position: 'relative' }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  aria-label={tl('projectIntro.close', 'Close')}
+                  onClick={handleProjectIntroClose}
+                  style={{
+                    position: 'absolute',
+                    top: 10,
+                    right: 10,
+                    width: 40,
+                    height: 40,
+                    padding: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <X size={22} strokeWidth={2} aria-hidden="true" />
+                </button>
+                <div className="card-top" style={{ paddingRight: 48 }}>
+                  <div className="card-title-wrap">
+                    <h3 id="project-intro-title" className="card-title">
+                      {tl('projectIntro.title', 'Welcome to SoilSense AI')}
+                    </h3>
+                  </div>
+                </div>
+                <div className="card-body">
+                  <p className="muted" style={{ margin: 0, lineHeight: 1.55 }}>
+                    {tl(
+                      'projectIntro.body',
+                      'SoilSense AI helps you understand soil health, plan crops and compost, interpret plant scans, and track daily tasks for your fields—all in one place. Close this message to continue with a short tour of the app.'
+                    )}
+                  </p>
+                </div>
+              </section>
+            </div>
+          ) : null}
           <GuideTour open={showTour} onClose={handleTourClose} />
           {locationSetupOpen ? (
             <div
@@ -1381,6 +1482,47 @@ function AppRoot() {
           </div>
         </section>
       )}
+
+      {showAddField ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="field-form-dialog-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.25)',
+            zIndex: 2590,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowAddField(false)
+              setEditingFieldId('')
+            }
+          }}
+        >
+          <section
+            className="card"
+            style={{ width: '100%', maxWidth: 560, maxHeight: 'min(90vh, 720px)', display: 'flex', flexDirection: 'column' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="card-top" style={{ flexShrink: 0 }}>
+              <div className="card-title-wrap">
+                <h3 id="field-form-dialog-title" className="card-title">
+                  {editingFieldId ? tl('fields.editField', 'Edit Field') : tl('fields.addField', 'Add Field')}
+                </h3>
+              </div>
+            </div>
+            <div className="card-body" style={{ overflow: 'auto', flex: 1, minHeight: 0 }}>
+              {renderMyFieldForm()}
+            </div>
+          </section>
+        </div>
+      ) : null}
       </div>
     </div>
   )
