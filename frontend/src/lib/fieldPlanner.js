@@ -94,6 +94,70 @@ function uniq(items) {
   return Array.from(new Set(items.filter(Boolean)))
 }
 
+function customCropIdFromLabel(label) {
+  const s = String(label || '').trim()
+  let h = 0
+  for (let i = 0; i < s.length; i += 1) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0
+  return `custom-${Math.abs(h).toString(36)}`
+}
+
+/** User-entered grow list (trim, dedupe, cap count/length). */
+export function normalizeCustomGrowLabels(input) {
+  if (!Array.isArray(input)) return []
+  const seen = new Set()
+  const out = []
+  for (const x of input) {
+    const s = typeof x === 'string' ? x.trim().slice(0, 48) : ''
+    if (s.length < 1) continue
+    const key = s.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(s)
+    if (out.length >= 12) break
+  }
+  return out
+}
+
+function buildSyntheticCustomCrop(displayName) {
+  const name = String(displayName || '').trim()
+  const id = customCropIdFromLabel(name)
+  return {
+    id,
+    name,
+    custom: true,
+    suitableSoils: ['loam', 'sandy', 'silty', 'clay'],
+    climateTags: [],
+    regions: [],
+    compostKgPerHa: 2000,
+    pesticideLPerHa: 2,
+    pesticideToleranceLPerHa: 3,
+    rowSpacingM: 0.85,
+    plantSpacingM: 0.4,
+    companions: [],
+    antagonists: [],
+  }
+}
+
+export function hasUserGrowSelections(profile) {
+  const libIds = Array.isArray(profile?.currentCrops) ? profile.currentCrops : []
+  const hasLib = libIds.some((id) => Boolean(CROP_LIBRARY[id]))
+  return hasLib || normalizeCustomGrowLabels(profile?.customCrops).length > 0
+}
+
+/** Labels for LLM / memory: localized library names + custom strings. */
+export function buildCropTypesForAdvice(profile, t) {
+  const libIds = Array.isArray(profile?.currentCrops) ? profile.currentCrops.filter((id) => Boolean(CROP_LIBRARY[id])) : []
+  const fromLib = libIds.map((id) => (typeof t === 'function' ? t(`crops.${id}`) : CROP_LIBRARY[id].name))
+  const custom = normalizeCustomGrowLabels(profile?.customCrops)
+  return [...fromLib, ...custom]
+}
+
+export function cropDisplayNameForTask(crop, t) {
+  if (!crop) return ''
+  if (crop.custom) return crop.name
+  return typeof t === 'function' ? t(`crops.${crop.id}`) : crop.name
+}
+
 export function getAvailableCrops() {
   return Object.values(CROP_LIBRARY).map((crop) => ({ id: crop.id, name: crop.name }))
 }
@@ -108,9 +172,15 @@ export function buildFieldPlan({ profile, climateZoneHint, activityImpact }) {
     .sort((a, b) => b.score - a.score)
 
   const recommendedCropIds = scored.slice(0, 3).map((x) => x.crop.id)
-  const selectedCropIdsRaw = Array.isArray(profile?.currentCrops) ? profile.currentCrops : []
-  const selectedCropIds = selectedCropIdsRaw.length ? selectedCropIdsRaw : recommendedCropIds.slice(0, 1)
-  const selectedCrops = selectedCropIds.map((id) => CROP_LIBRARY[id]).filter(Boolean)
+  const libraryIdsRaw = Array.isArray(profile?.currentCrops) ? profile.currentCrops : []
+  const libraryIds = libraryIdsRaw.filter((id) => Boolean(CROP_LIBRARY[id]))
+  const customLabels = normalizeCustomGrowLabels(profile?.customCrops)
+  const fromLibrary = libraryIds.map((id) => CROP_LIBRARY[id]).filter(Boolean)
+  const fromCustom = customLabels.map(buildSyntheticCustomCrop)
+  let selectedCrops = [...fromLibrary, ...fromCustom]
+  if (!selectedCrops.length) {
+    selectedCrops = recommendedCropIds.slice(0, 1).map((id) => CROP_LIBRARY[id]).filter(Boolean)
+  }
 
   const dosageByCrop = selectedCrops.map((crop) => ({
     cropId: crop.id,
@@ -221,8 +291,7 @@ export function buildFieldPlan({ profile, climateZoneHint, activityImpact }) {
 
 export function buildCropDrivenDailyTasks(fieldPlan, t) {
   const crops = Array.isArray(fieldPlan?.selectedCrops) ? fieldPlan.selectedCrops : []
-  const cropNames =
-    crops.map((x) => (typeof t === 'function' ? t(`crops.${x.id}`) : x.name)).join(', ') || 'selected crops'
+  const cropNames = crops.map((x) => cropDisplayNameForTask(x, t)).join(', ') || 'selected crops'
   const dosage = fieldPlan?.dosage || {}
   const spacing = fieldPlan?.spacing || {}
 

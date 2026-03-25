@@ -25,7 +25,12 @@ import {
   updateFieldLocation,
 } from './lib/auth'
 import { installScopedLocalStorage, toScopedStorageKey } from './lib/storageScope'
-import { geocodeFieldAddress } from './lib/geocoding'
+import { geocodeFieldAddress, coordinatesIndicateWater } from './lib/geocoding'
+import {
+  fieldAreaHectares,
+  isRealisticFieldAreaHa,
+  parseStrictPositiveFieldSize,
+} from './lib/fieldValidation'
 
 const appLog = createLogger('app')
 const pwaLog = createLogger('pwa')
@@ -53,6 +58,7 @@ function ensureScopedProfileSeed(userId, field) {
       },
       workforce: null,
       currentCrops: [],
+      customCrops: [],
       equipment: { shovel: false, tractor: false, sprinkler: false, dripIrrigation: false },
       updatedAt: new Date().toISOString(),
     }
@@ -418,12 +424,33 @@ function FirstFieldSetup({ session, onDone, onLogout }) {
           manualLocation = { latitude: geo.latitude, longitude: geo.longitude }
         } catch (err) {
           setErrorText(err?.message ? String(err.message) : String(err))
+          return
         }
       }
+
+      const sizeParsed = parseStrictPositiveFieldSize(sizeValue)
+      if (!sizeParsed.ok) {
+        window.alert(t('fields.validation.sizeNumbersOnly'))
+        return
+      }
+      const areaHa = fieldAreaHectares(sizeParsed.value, sizeUnit)
+      if (!isRealisticFieldAreaHa(areaHa)) {
+        window.alert(t('fields.validation.checkFieldSize'))
+        return
+      }
+
+      if (typeof manualLocation.latitude === 'number' && typeof manualLocation.longitude === 'number') {
+        const water = await coordinatesIndicateWater(manualLocation.latitude, manualLocation.longitude)
+        if (water) {
+          window.alert(t('fields.validation.selectLand'))
+          return
+        }
+      }
+
       addUserField(session.userId, {
         name,
         soilType,
-        fieldSize: { value: parseNumberOrNull(sizeValue), unit: sizeUnit },
+        fieldSize: { value: sizeParsed.value, unit: sizeUnit === 'sqm' ? 'sqm' : 'ha' },
         address,
         manualLocation,
       })
@@ -459,7 +486,15 @@ function FirstFieldSetup({ session, onDone, onLogout }) {
         <label className="field">
           <span className="field-label">{t('profile.fieldSizeLabel')}</span>
           <div style={{ display: 'flex', gap: 8 }}>
-            <input className="field-input" value={sizeValue} onChange={(e) => setSizeValue(e.target.value)} inputMode="decimal" />
+            <input
+              className="field-input"
+              type="number"
+              inputMode="decimal"
+              min={0}
+              step="any"
+              value={sizeValue}
+              onChange={(e) => setSizeValue(e.target.value)}
+            />
             <select className="field-input" value={sizeUnit} onChange={(e) => setSizeUnit(e.target.value)} style={{ width: 120 }}>
               <option value="sqm">{t('profile.fieldSizeUnits.sqm')}</option>
               <option value="ha">{t('profile.fieldSizeUnits.ha')}</option>
@@ -653,14 +688,35 @@ function AppRoot() {
           manualLocation = { latitude: geo.latitude, longitude: geo.longitude }
         } catch (err) {
           setFieldError(err?.message ? String(err.message) : String(err))
+          return
         }
       }
+
+      const sizeParsed = parseStrictPositiveFieldSize(newFieldSizeValue)
+      if (!sizeParsed.ok) {
+        window.alert(tl('fields.validation.sizeNumbersOnly', 'Please enter the field size as a number'))
+        return
+      }
+      const areaHa = fieldAreaHectares(sizeParsed.value, newFieldSizeUnit)
+      if (!isRealisticFieldAreaHa(areaHa)) {
+        window.alert(tl('fields.validation.checkFieldSize', 'Please check the size of the field'))
+        return
+      }
+
+      if (typeof manualLocation.latitude === 'number' && typeof manualLocation.longitude === 'number') {
+        const water = await coordinatesIndicateWater(manualLocation.latitude, manualLocation.longitude)
+        if (water) {
+          window.alert(tl('fields.validation.selectLand', 'Please select land'))
+          return
+        }
+      }
+
       const field = addUserField(session.userId, {
         name: newFieldName,
         soilType: newFieldSoilType,
         fieldSize: {
-          value: parseNumberOrNull(newFieldSizeValue),
-          unit: newFieldSizeUnit,
+          value: sizeParsed.value,
+          unit: newFieldSizeUnit === 'sqm' ? 'sqm' : 'ha',
         },
         address: newFieldAddress,
         manualLocation,
@@ -721,14 +777,35 @@ function AppRoot() {
           manualLocation = { latitude: geo.latitude, longitude: geo.longitude }
         } catch (err) {
           setFieldError(err?.message ? String(err.message) : String(err))
+          return
         }
       }
+
+      const sizeParsed = parseStrictPositiveFieldSize(newFieldSizeValue)
+      if (!sizeParsed.ok) {
+        window.alert(tl('fields.validation.sizeNumbersOnly', 'Please enter the field size as a number'))
+        return
+      }
+      const areaHa = fieldAreaHectares(sizeParsed.value, newFieldSizeUnit)
+      if (!isRealisticFieldAreaHa(areaHa)) {
+        window.alert(tl('fields.validation.checkFieldSize', 'Please check the size of the field'))
+        return
+      }
+
+      if (typeof manualLocation.latitude === 'number' && typeof manualLocation.longitude === 'number') {
+        const water = await coordinatesIndicateWater(manualLocation.latitude, manualLocation.longitude)
+        if (water) {
+          window.alert(tl('fields.validation.selectLand', 'Please select land'))
+          return
+        }
+      }
+
       const updated = updateUserField(session.userId, editingFieldId, {
         name: newFieldName,
         soilType: newFieldSoilType,
         fieldSize: {
-          value: parseNumberOrNull(newFieldSizeValue),
-          unit: newFieldSizeUnit,
+          value: sizeParsed.value,
+          unit: newFieldSizeUnit === 'sqm' ? 'sqm' : 'ha',
         },
         address: newFieldAddress,
         manualLocation,
@@ -805,6 +882,13 @@ function AppRoot() {
           setLocationResolveError(err?.message ? String(err.message) : String(err))
         } finally {
           setIsResolvingLocationAddress(false)
+        }
+      }
+      if (typeof latitude === 'number' && typeof longitude === 'number') {
+        const water = await coordinatesIndicateWater(latitude, longitude)
+        if (water) {
+          window.alert(tl('fields.validation.selectLand', 'Please select land'))
+          return
         }
       }
       // This function is called from inside ScopedAppStorage, so use the base key.
@@ -899,7 +983,15 @@ function AppRoot() {
                 <label className="field" style={{ margin: 0 }}>
                   <span className="field-label">{tl('profile.fieldSizeLabel', 'Field Size')}</span>
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <input className="field-input" value={newFieldSizeValue} onChange={(e) => setNewFieldSizeValue(e.target.value)} inputMode="decimal" />
+                    <input
+                      className="field-input"
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      step="any"
+                      value={newFieldSizeValue}
+                      onChange={(e) => setNewFieldSizeValue(e.target.value)}
+                    />
                     <select className="field-input" value={newFieldSizeUnit} onChange={(e) => setNewFieldSizeUnit(e.target.value)} style={{ width: 100 }}>
                       <option value="sqm">{t('profile.fieldSizeUnits.sqm')}</option>
                       <option value="ha">{t('profile.fieldSizeUnits.ha')}</option>

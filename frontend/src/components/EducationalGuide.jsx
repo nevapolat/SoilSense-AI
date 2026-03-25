@@ -1,5 +1,10 @@
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { useI18n } from '../i18n/useI18n'
+
+function scrollToGuideSection(id) {
+  const el = typeof document !== 'undefined' ? document.getElementById(id) : null
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 function toFixedOrNull(n, digits) {
   if (typeof n !== 'number' || !Number.isFinite(n)) return null
@@ -58,27 +63,57 @@ export default function EducationalGuide({ coords, climateZoneHint, activityImpa
   const whyBulletsList = Array.isArray(whyBullets) ? whyBullets : []
   const pesticideBulletsList = Array.isArray(pesticideBullets) ? pesticideBullets : []
 
+  const jump = useCallback((id) => () => scrollToGuideSection(id), [])
+
   return (
     <div className="educational-guide">
-      <div className="educational-guide-meta">
-        <div className="educational-guide-meta-row">
-          <span className="educational-guide-badge">{t('compostPestGuide.readingLabel')}</span>
-          <span className="educational-guide-zone muted">
-            {locationZoneLabel}
-            {latStr && lonStr ? ` • ${latStr}, ${lonStr}` : null}
-          </span>
-        </div>
-      </div>
+      <header className="educational-guide-header">
+        <h2 className="educational-guide-hero">{t('compostPestGuide.heroTitle')}</h2>
+        <p className="educational-guide-hero-sub">{t('compostPestGuide.heroSubtitle')}</p>
+        <p className="educational-guide-context muted">
+          <span className="educational-guide-context-zone">{locationZoneLabel}</span>
+          {latStr && lonStr ? (
+            <span className="educational-guide-context-coords">
+              {' '}
+              · {latStr}, {lonStr}
+            </span>
+          ) : null}
+        </p>
+      </header>
 
-      <h2 className="educational-guide-hero">{t('compostPestGuide.heroTitle')}</h2>
-      <p className="educational-guide-hero-sub">{t('compostPestGuide.heroSubtitle')}</p>
+      <nav className="guide-topic-nav" aria-label={t('guide.tocAria')}>
+        <button type="button" className="guide-topic-pill guide-topic-pill-featured" onClick={jump('guide-recommended')}>
+          {t('guide.tocPickForYou')}
+        </button>
+        <button type="button" className="guide-topic-pill" onClick={jump('why-soil-health')}>
+          {t('guide.tocSoil')}
+        </button>
+        <button type="button" className="guide-topic-pill" onClick={jump('pesticide-impact')}>
+          {t('guide.tocPesticides')}
+        </button>
+        <button type="button" className="guide-topic-pill" onClick={jump('location-tips')}>
+          {t('guide.tocZone')}
+        </button>
+      </nav>
 
-      <div className="educational-guide-recommended" role="note">
+      <div
+        id="guide-recommended"
+        className="educational-guide-recommended"
+        role="note"
+        tabIndex={-1}
+      >
         <div className="educational-guide-recommended-top">
           <span className="educational-guide-recommended-label">{t('compostPestGuide.recommendedReadLabel')}</span>
-          <a className="educational-guide-recommended-link" href={highPesticideUse ? '#pesticide-impact' : '#why-soil-health'}>
+          <button
+            type="button"
+            className="educational-guide-recommended-jump"
+            onClick={jump(highPesticideUse ? 'pesticide-impact' : 'why-soil-health')}
+          >
             {recommendedReadTitle}
-          </a>
+            <span className="educational-guide-recommended-jump-arrow" aria-hidden>
+              →
+            </span>
+          </button>
         </div>
         <p className="educational-guide-recommended-desc">{recommendedReadDesc}</p>
       </div>

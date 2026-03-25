@@ -1520,11 +1520,28 @@
   }
 }
 
-/* Educational Guide (Medium-style) */
+/* Guide tab: readable layout, no nested scroll trap */
+.guide-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.guide-dashboard-header {
+  margin-bottom: 0;
+}
+
+.guide-card-body-reading {
+  padding-top: 8px;
+}
+
+.guide-card-hub .knowledge-hub-title {
+  display: none;
+}
+
 .guide-insights-scroll {
-  max-height: 62vh;
-  overflow-y: auto;
-  padding-right: 6px;
+  /* class kept for onboarding tour targeting; content uses main page scroll */
+  padding-right: 0;
 }
 
 .educational-guide {
@@ -1532,86 +1549,183 @@
   max-width: 720px;
 }
 
-.educational-guide-meta {
-  margin-bottom: 10px;
+.educational-guide-header {
+  margin-bottom: 12px;
 }
 
-.educational-guide-meta-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+.educational-guide-context {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.4;
 }
 
-.educational-guide-badge {
-  font-weight: 950;
+.educational-guide-context-zone {
+  font-weight: 800;
   color: var(--text-h);
-  font-size: 12px;
-  border: 1px solid rgba(136, 176, 133, 0.35);
-  background: rgba(136, 176, 133, 0.08);
-  padding: 6px 10px;
+  opacity: 0.88;
+}
+
+.guide-topic-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 10px 0 12px;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.guide-topic-pill {
+  appearance: none;
+  border: 1px solid rgba(26, 67, 50, 0.14);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text-h);
+  font-weight: 800;
+  font-size: 13px;
+  padding: 10px 14px;
   border-radius: 999px;
+  cursor: pointer;
+  line-height: 1.2;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+}
+
+.guide-topic-pill:hover {
+  border-color: rgba(27, 90, 64, 0.35);
+  background: rgba(124, 166, 137, 0.12);
+}
+
+.guide-topic-pill:active {
+  transform: scale(0.98);
+}
+
+.guide-topic-pill-featured {
+  border-color: rgba(27, 90, 64, 0.38);
+  background: rgba(124, 166, 137, 0.18);
+  color: var(--text-h);
 }
 
 .educational-guide-hero {
   margin: 0;
-  font-size: 20px;
+  font-size: clamp(1.15rem, 3.5vw, 1.35rem);
   font-weight: 950;
   color: var(--text-h);
+  line-height: 1.25;
 }
 
 .educational-guide-hero-sub {
-  margin: 8px 0 14px;
-  line-height: 1.45;
-  opacity: 0.92;
+  margin: 8px 0 0;
+  line-height: 1.5;
+  opacity: 0.9;
+  font-size: 14px;
 }
 
 .educational-guide-recommended {
-  border-radius: 16px;
-  border: 1px solid rgba(136, 176, 133, 0.30);
-  background: rgba(136, 176, 133, 0.06);
-  padding: 12px;
-  margin-bottom: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(136, 176, 133, 0.32);
+  background: rgba(136, 176, 133, 0.08);
+  padding: 14px 14px 12px;
+  margin-bottom: 18px;
+  scroll-margin-top: 96px;
+  outline: none;
 }
 
 .educational-guide-recommended-top {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+@media (min-width: 520px) {
+  .educational-guide-recommended-top {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+  }
 }
 
 .educational-guide-recommended-label {
   font-weight: 950;
-  font-size: 12px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--text-h);
-  opacity: 0.85;
+  opacity: 0.72;
 }
 
-.educational-guide-recommended-link {
-  font-weight: 950;
+.educational-guide-recommended-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 900;
+  font-size: 15px;
   color: var(--primary);
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.educational-guide-recommended-jump:hover {
+  opacity: 0.88;
+}
+
+.educational-guide-recommended-jump-arrow {
   text-decoration: none;
-  border-bottom: 1px dashed rgba(var(--primary), 0.35);
+  font-weight: 800;
 }
 
 .educational-guide-recommended-desc {
-  margin: 8px 0 0;
-  opacity: 0.92;
-  line-height: 1.45;
+  margin: 10px 0 0;
+  opacity: 0.9;
+  line-height: 1.5;
+  font-size: 14px;
 }
 
 .educational-guide-article {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .educational-guide-section {
-  border-radius: 16px;
-  border: 1px solid rgba(26, 67, 50, 0.16);
-  background: rgba(124, 166, 137, 0.03);
-  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.55);
+  padding: 16px;
+  scroll-margin-top: 96px;
+  box-shadow: 0 1px 0 rgba(26, 67, 50, 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  .guide-topic-pill {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--border);
+  }
+
+  .guide-topic-pill:hover {
+    background: rgba(58, 139, 84, 0.12);
+  }
+
+  .guide-topic-pill-featured {
+    background: rgba(58, 139, 84, 0.18);
+    border-color: rgba(58, 139, 84, 0.35);
+  }
+
+  .educational-guide-section {
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: none;
+  }
 }
 
 .educational-guide-h3 {
@@ -1737,10 +1851,12 @@
 }
 
 @media (max-width: 760px) {
-  .guide-insights-scroll {
-    max-height: 68vh;
-  }
   .educational-guide-goodbad {
     grid-template-columns: 1fr;
+  }
+
+  .guide-topic-pill {
+    font-size: 12px;
+    padding: 9px 12px;
   }
 }

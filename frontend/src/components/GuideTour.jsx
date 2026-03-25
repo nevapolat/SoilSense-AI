@@ -233,7 +233,12 @@ function getTargetElement(stepKey) {
       document.querySelector('.dashboard .card') ||
       document.querySelector('.bottom-nav .nav-item:nth-child(3)')
     )
-  if (stepKey === 'educationalGuides') return document.querySelector('.guide-insights-scroll') || document.querySelector('.bottom-nav .nav-item:nth-child(4)')
+  if (stepKey === 'educationalGuides')
+    return (
+      document.querySelector('.guide-card-articles') ||
+      document.querySelector('.guide-insights-scroll') ||
+      document.querySelector('.bottom-nav .nav-item:nth-child(4)')
+    )
   if (stepKey === 'scan')
     return (
       document.querySelector('.scanner-grid')?.closest('.card') ||

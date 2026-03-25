@@ -120,3 +120,51 @@ export async function geocodeFieldAddress(address) {
     'Address lookup was inconclusive. Keep this address saved and continue; AI regional analysis will still run, then refine with city/district/country for weather-accurate alerts.'
   )
 }
+
+/** Nominatim requires a valid User-Agent identifying the application. */
+const NOMINATIM_REVERSE_UA = 'SoilSense/1.0 (field-location-validation)'
+
+function nominatimReverseResultIsWater(data) {
+  if (!data || typeof data !== 'object' || data.error) return false
+  const cls = data.class
+  const typ = data.type
+  if (cls === 'natural' && ['water', 'bay', 'strait', 'reef', 'shoal'].includes(typ)) return true
+  if (cls === 'waterway' && !['dam', 'weir', 'riverbank'].includes(typ)) return true
+  if (cls === 'place' && ['sea', 'ocean'].includes(typ)) return true
+  if (cls === 'leisure' && typ === 'marina') return true
+  const cat = typeof data.category === 'string' ? data.category : ''
+  if (
+    cat.startsWith('waterway:') &&
+    !cat.startsWith('waterway:dam') &&
+    !cat.startsWith('waterway:weir') &&
+    cat !== 'waterway:riverbank'
+  ) {
+    return true
+  }
+  if (['natural:water', 'natural:bay', 'natural:strait', 'natural:reef'].includes(cat)) return true
+  return false
+}
+
+/**
+ * Uses OpenStreetMap Nominatim reverse lookup. Returns true if the resolved feature is
+ * typically water (sea, lake, river, etc.). On network/API failure returns false so saves are not blocked.
+ */
+export async function coordinatesIndicateWater(latitude, longitude) {
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${encodeURIComponent(
+      String(latitude)
+    )}&lon=${encodeURIComponent(String(longitude))}&format=jsonv2&zoom=12&addressdetails=1`
+    const res = await fetch(url, {
+      headers: {
+        'Accept-Language': 'en',
+        'User-Agent': NOMINATIM_REVERSE_UA,
+      },
+    })
+    if (!res.ok) return false
+    const data = await res.json()
+    return nominatimReverseResultIsWater(data)
+  } catch {
+    return false
+  }
+}

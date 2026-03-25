@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { AlertTriangle, CheckCircle2, Map } from 'lucide-react'
 
 export default function FieldPlanner({ t, fieldPlan }) {
@@ -5,6 +6,15 @@ export default function FieldPlanner({ t, fieldPlan }) {
 
   const recommended = Array.isArray(fieldPlan.recommendations) ? fieldPlan.recommendations : []
   const selected = Array.isArray(fieldPlan.selectedCrops) ? fieldPlan.selectedCrops : []
+
+  const cropNameById = useMemo(() => {
+    const m = new Map()
+    for (const c of selected) {
+      if (!c?.id) continue
+      m.set(c.id, c.custom ? c.name : t(`crops.${c.id}`))
+    }
+    return m
+  }, [selected, t])
   const dosage = fieldPlan.dosage || {}
   const spacing = fieldPlan.spacing || {}
   const compatibility = fieldPlan.compatibility || {}
@@ -14,6 +24,7 @@ export default function FieldPlanner({ t, fieldPlan }) {
   const compatibilityWarningCodes = Array.isArray(compatibility.warningCodes) ? compatibility.warningCodes : []
 
   function cropLabel(cropId) {
+    if (cropNameById.has(cropId)) return cropNameById.get(cropId)
     return t(`crops.${cropId}`)
   }
 
@@ -76,7 +87,7 @@ export default function FieldPlanner({ t, fieldPlan }) {
           <div className="chips">
             {selected.map((crop) => (
               <span key={crop.id} className="chip">
-                {t(`crops.${crop.id}`)}
+                {crop.custom ? crop.name : t(`crops.${crop.id}`)}
               </span>
             ))}
           </div>

@@ -22,8 +22,20 @@ import { useI18n } from './i18n/useI18n'
 import { bucketAccuracyMeters, createLogger, generateRunId, normalizeErrorForLog } from './lib/logger'
 import EducationalGuide from './components/EducationalGuide'
 import FieldPlanner from './components/FieldPlanner'
-import { buildCropDrivenDailyTasks, buildFieldPlan, getAvailableCrops } from './lib/fieldPlanner'
-import { geocodeFieldAddress } from './lib/geocoding'
+import {
+  buildCropDrivenDailyTasks,
+  buildCropTypesForAdvice,
+  buildFieldPlan,
+  getAvailableCrops,
+  hasUserGrowSelections,
+  normalizeCustomGrowLabels,
+} from './lib/fieldPlanner'
+import { geocodeFieldAddress, coordinatesIndicateWater } from './lib/geocoding'
+import {
+  fieldAreaHectares,
+  isRealisticFieldAreaHa,
+  parseStrictPositiveFieldSize,
+} from './lib/fieldValidation'
 import {
   appendFarmMemoryEntry,
   buildDetectedChangesFromMemory,
@@ -45,6 +57,37 @@ function coordsKey(c) {
 function toFixedOrDash(n, digits) {
   if (typeof n !== 'number' || Number.isNaN(n)) return '—'
   return n.toFixed(digits)
+}
+
+/**
+ * When daily regenerative tasks are marked done, add a bounded boost to soil health (and a smaller
+ * one to sustainability). Weighted by estimated minutes and step count as a proxy for effort / impact.
+ */
+function computeDailyTasksScoreImpact(tasks, completedIds) {
+  if (!Array.isArray(tasks) || !tasks.length || !Array.isArray(completedIds)) {
+    return { soilDelta: 0, sustainDelta: 0, completedCount: 0 }
+  }
+  const done = new Set(completedIds.map(String))
+  let raw = 0
+  let completedCount = 0
+  for (const task of tasks) {
+    if (!task || task.id == null) continue
+    if (!done.has(String(task.id))) continue
+    completedCount += 1
+    const minutes =
+      typeof task.estimatedMinutes === 'number' &&
+      Number.isFinite(task.estimatedMinutes) &&
+      task.estimatedMinutes > 0
+        ? task.estimatedMinutes
+        : 20
+    const stepsN = Array.isArray(task.steps) ? task.steps.length : 0
+    const effort = 0.55 + 0.45 * Math.min(1, minutes / 55)
+    const depth = 1 + Math.min(0.5, stepsN * 0.065)
+    raw += 2.8 * effort * depth
+  }
+  const soilDelta = Math.min(16, raw)
+  const sustainDelta = Math.min(9, raw * 0.52)
+  return { soilDelta, sustainDelta, completedCount }
 }
 
 const PROFILE_STORAGE_KEY = 'soilsense.profile'
@@ -97,6 +140,7 @@ function normalizeProfile(profile) {
 
   const equipmentRaw = p.equipment && typeof p.equipment === 'object' ? p.equipment : {}
   const currentCrops = Array.isArray(p.currentCrops) ? p.currentCrops.filter((x) => typeof x === 'string') : []
+  const customCrops = normalizeCustomGrowLabels(p.customCrops)
   const equipment = {
     shovel: Boolean(equipmentRaw.shovel),
     tractor: Boolean(equipmentRaw.tractor),
@@ -112,6 +156,7 @@ function normalizeProfile(profile) {
     fieldSize: { value: fieldSizeValue, unit: fieldSizeUnit },
     workforce,
     currentCrops,
+    customCrops,
     equipment,
     updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : undefined,
   }
@@ -841,6 +886,8 @@ export default function SoilSenseApp() {
     return p.equipment || { shovel: false, tractor: false, sprinkler: false, dripIrrigation: false }
   })
   const [currentCropsDraft, setCurrentCropsDraft] = useState(() => normalizeProfile(loadProfile()).currentCrops || [])
+  const [customCropsDraft, setCustomCropsDraft] = useState(() => normalizeProfile(loadProfile()).customCrops || [])
+  const [customGrowInput, setCustomGrowInput] = useState('')
   const [activityLog, setActivityLog] = useState(() => loadActivityLog())
   const [activityPickerOpen, setActivityPickerOpen] = useState(false)
   const [activityDraftTypeId, setActivityDraftTypeId] = useState('')
@@ -862,10 +909,9 @@ export default function SoilSenseApp() {
     // Highest priority: frost critical.
     if (base.isCritical || base.riskType === 'frost') return base
 
-    const selectedCropIds = Array.isArray(profile?.currentCrops) ? profile.currentCrops : []
-    const selectedCrops = selectedCropIds.map((id) => ({ id, name: t(`crops.${id}`) }))
-    if (selectedCrops.length) {
-      const cropNames = selectedCrops.map((x) => x.name).join(', ')
+    const cropNamesList = buildCropTypesForAdvice(profile, t)
+    if (cropNamesList.length) {
+      const cropNames = cropNamesList.join(', ')
       return {
         ...base,
         status: `${cropNames}: ${base.status || ''}`.trim(),
@@ -1211,16 +1257,27 @@ export default function SoilSenseApp() {
     const pesticideSoilDelta = -pesticideDoseFactor * pesticideFreq * 22
     const chemicalFertilizerSoilDelta = -chemicalFertilizerDoseFactor * chemicalFertilizerFreq * 9
 
-    const soilHealthDelta = organicSoilDelta + pesticideSoilDelta + chemicalFertilizerSoilDelta
+    const dailyTasksImpact = computeDailyTasksScoreImpact(dailyTasks, completedTaskIds)
+    const soilHealthDelta =
+      organicSoilDelta +
+      pesticideSoilDelta +
+      chemicalFertilizerSoilDelta +
+      dailyTasksImpact.soilDelta
 
     // Sustainability: track “greenness” more conservatively than soil health.
     const organicSustainDelta = organicSoilDelta * 0.55
     const pesticideSustainDelta = pesticideSoilDelta * 0.7
     const chemicalFertilizerSustainDelta = chemicalFertilizerSoilDelta * 0.6
-    const sustainabilityDelta = organicSustainDelta + pesticideSustainDelta + chemicalFertilizerSustainDelta
+    const sustainabilityDelta =
+      organicSustainDelta +
+      pesticideSustainDelta +
+      chemicalFertilizerSustainDelta +
+      dailyTasksImpact.sustainDelta
 
     const compostRecentlyAdded = typeof lastOrganicTs === 'number' && now - lastOrganicTs <= 48 * 60 * 60 * 1000
     const chemicalRecentlyApplied = typeof lastChemicalTs === 'number' && now - lastChemicalTs <= 72 * 60 * 60 * 1000
+
+    const tasksDoneKey = [...completedTaskIds].map(String).sort().join('>')
 
     const fingerprint = [
       profile?.soilType || 'loam',
@@ -1233,6 +1290,7 @@ export default function SoilSenseApp() {
       `chemFertN:${chemicalFertilizerCount}`,
       `orgTs:${lastOrganicTs ? Math.round(lastOrganicTs / 60000) : 0}`,
       `chemTs:${lastChemicalTs ? Math.round(lastChemicalTs / 60000) : 0}`,
+      `dailyTasksDone:${tasksDoneKey}`,
     ].join('|')
 
     return {
@@ -1247,8 +1305,10 @@ export default function SoilSenseApp() {
       compostRecentlyAdded,
       chemicalRecentlyApplied,
       fingerprint,
+      dailyTasksCompletedCount: dailyTasksImpact.completedCount,
+      dailyTasksSoilDelta: dailyTasksImpact.soilDelta,
     }
-  }, [activityLog, profile, recentActivities])
+  }, [activityLog, profile, recentActivities, dailyTasks, completedTaskIds])
 
   const fieldPlan = useMemo(
     () =>
@@ -1305,6 +1365,8 @@ export default function SoilSenseApp() {
     const fs = profile?.fieldSize?.value
     const fu = profile?.fieldSize?.unit
     const eq = profile?.equipment || {}
+    const cropIds = Array.isArray(profile?.currentCrops) ? profile.currentCrops : []
+    const customGrow = Array.isArray(profile?.customCrops) ? profile.customCrops : []
     return [
       profile?.soilType || 'loam',
       typeof fs === 'number' ? fs : 'na',
@@ -1314,6 +1376,8 @@ export default function SoilSenseApp() {
       `tractor:${eq.tractor ? 1 : 0}`,
       `sprinkler:${eq.sprinkler ? 1 : 0}`,
       `drip:${eq.dripIrrigation ? 1 : 0}`,
+      `crops:${cropIds.join(',')}`,
+      `grow:${customGrow.join('>')}`,
     ].join('|')
   }, [profile])
 
@@ -1335,15 +1399,26 @@ export default function SoilSenseApp() {
 
   function saveProfileDraft() {
     uiLog.info('ui.modal.profile', { action: 'close', reason: 'save' })
-    const fieldSizeValue =
-      typeof fieldSizeDraft === 'string' && fieldSizeDraft.trim().length
-        ? Number(fieldSizeDraft)
-        : null
+    const trimmedFieldSize =
+      typeof fieldSizeDraft === 'string' ? fieldSizeDraft.trim() : ''
+    let normalizedFieldSizeValue = null
+    if (trimmedFieldSize.length) {
+      const sizeParsed = parseStrictPositiveFieldSize(fieldSizeDraft)
+      if (!sizeParsed.ok) {
+        window.alert(t('fields.validation.sizeNumbersOnly'))
+        return
+      }
+      const areaHa = fieldAreaHectares(sizeParsed.value, fieldSizeUnitDraft)
+      if (!isRealisticFieldAreaHa(areaHa)) {
+        window.alert(t('fields.validation.checkFieldSize'))
+        return
+      }
+      normalizedFieldSizeValue = sizeParsed.value
+    }
     const workforceValue =
       typeof workforceDraft === 'string' && workforceDraft.trim().length
         ? Number(workforceDraft)
         : null
-    const normalizedFieldSizeValue = Number.isFinite(fieldSizeValue) ? fieldSizeValue : null
     const normalizedWorkforceValue = Number.isFinite(workforceValue) ? workforceValue : null
     const normalizedAddress = typeof addressDraft === 'string' ? addressDraft.trim() : ''
     const previousAddress = typeof profile?.address === 'string' ? profile.address.trim() : ''
@@ -1358,6 +1433,7 @@ export default function SoilSenseApp() {
       fieldSize: { value: normalizedFieldSizeValue, unit: fieldSizeUnitDraft },
       workforce: normalizedWorkforceValue,
       currentCrops: currentCropsDraft,
+      customCrops: normalizeCustomGrowLabels(customCropsDraft),
       equipment: equipmentDraft,
       updatedAt: new Date().toISOString(),
     }
@@ -1545,6 +1621,12 @@ export default function SoilSenseApp() {
 
       if (address) {
         const geo = await geocodeFieldAddress(address)
+        const waterFromGeo = await coordinatesIndicateWater(geo.latitude, geo.longitude)
+        if (waterFromGeo) {
+          setGeoStatus('error')
+          setGeoError(t('fields.validation.selectLand'))
+          return
+        }
         const nextCoords = {
           latitude: geo.latitude,
           longitude: geo.longitude,
@@ -1600,6 +1682,12 @@ export default function SoilSenseApp() {
           latitude: deviceCoords.latitude,
           longitude: deviceCoords.longitude,
           accuracy: deviceCoords.accuracy,
+        }
+        const waterFromGps = await coordinatesIndicateWater(nextCoords.latitude, nextCoords.longitude)
+        if (waterFromGps) {
+          setGeoStatus('error')
+          setGeoError(t('fields.validation.selectLand'))
+          return
         }
         setCoords(nextCoords)
         setGeoStatus('success')
@@ -1769,7 +1857,7 @@ export default function SoilSenseApp() {
           explanation: typeof vitalityExplanation === 'string' ? vitalityExplanation : '',
         },
         userActions: Array.isArray(activityLog) ? activityLog.slice(0, 25) : [],
-        cropType: Array.isArray(profile?.currentCrops) ? profile.currentCrops : [],
+        cropType: buildCropTypesForAdvice(profile, t),
       }
       const memoryAfter = appendFarmMemoryEntry(locationContext.farmKey, locationContext, todayEntry)
 
@@ -1788,7 +1876,7 @@ export default function SoilSenseApp() {
           weatherHistoryCount: Array.isArray(memoryAfter?.entries) ? memoryAfter.entries.length : 0,
         },
         userActions: Array.isArray(activityLog) ? activityLog.slice(0, 50) : [],
-        cropType: Array.isArray(profile?.currentCrops) ? profile.currentCrops : [],
+        cropType: buildCropTypesForAdvice(profile, t),
         farmMemory: memoryAfter || memoryBefore || { entries: [] },
         lang,
         correlationId,
@@ -1950,11 +2038,12 @@ export default function SoilSenseApp() {
             correlationId,
             profile,
             activityImpact,
+            preferredCropsSummary: buildCropTypesForAdvice(profile, t).join(', '),
           })
 
           const tasksCandidate = dailyJson?.tasks
           const cropTasks = buildCropDrivenDailyTasks(fieldPlan, t)
-          const hasCropSelection = Array.isArray(profile?.currentCrops) && profile.currentCrops.length > 0
+          const hasCropSelection = hasUserGrowSelections(profile)
           const tasks = hasCropSelection
             ? cropTasks
             : Array.isArray(tasksCandidate) && tasksCandidate.length === 3
@@ -1984,7 +2073,7 @@ export default function SoilSenseApp() {
             })
           }
         } catch {
-          const hasCropSelection = Array.isArray(profile?.currentCrops) && profile.currentCrops.length > 0
+          const hasCropSelection = hasUserGrowSelections(profile)
           const tasks = hasCropSelection ? buildCropDrivenDailyTasks(fieldPlan, t) : buildDailyTasksFallback(signals, t)
           setDailyTasks(tasks)
           setDailyTasksStatus('success')
@@ -2032,7 +2121,7 @@ export default function SoilSenseApp() {
       setVitalityError(err?.message ? err.message : String(err))
 
       if (dailyTasks.length === 0 && !dailyTasksGenerationInFlightRef.current) {
-        const hasCropSelection = Array.isArray(profile?.currentCrops) && profile.currentCrops.length > 0
+        const hasCropSelection = hasUserGrowSelections(profile)
         const tasks = hasCropSelection ? buildCropDrivenDailyTasks(fieldPlan, t) : buildDailyTasksFallback({}, t)
         setDailyTasks(tasks)
         setDailyTasksStatus('success')
@@ -2111,11 +2200,12 @@ export default function SoilSenseApp() {
         correlationId,
         profile,
         activityImpact,
+        preferredCropsSummary: buildCropTypesForAdvice(profile, t).join(', '),
       })
 
       const tasksCandidate = dailyJson?.tasks
       const cropTasks = buildCropDrivenDailyTasks(fieldPlan, t)
-      const hasCropSelection = Array.isArray(profile?.currentCrops) && profile.currentCrops.length > 0
+      const hasCropSelection = hasUserGrowSelections(profile)
       const tasks = hasCropSelection
         ? cropTasks
         : Array.isArray(tasksCandidate) && tasksCandidate.length === 3
@@ -2150,8 +2240,8 @@ export default function SoilSenseApp() {
         })
       }
     } catch {
-      const hasCropSelection = Array.isArray(profile?.currentCrops) && profile.currentCrops.length > 0
-      const tasks = hasCropSelection ? buildCropDrivenDailyTasks(fieldPlan, t) : buildDailyTasksFallback(signals, t)
+          const hasCropSelection = hasUserGrowSelections(profile)
+          const tasks = hasCropSelection ? buildCropDrivenDailyTasks(fieldPlan, t) : buildDailyTasksFallback(signals, t)
       setDailyTasks(tasks)
       setDailyTasksStatus('success')
       setDailyTasksError('')
@@ -2442,6 +2532,10 @@ export default function SoilSenseApp() {
                       profile?.equipment || { shovel: false, tractor: false, sprinkler: false, dripIrrigation: false }
                     )
                     setCurrentCropsDraft(Array.isArray(profile?.currentCrops) ? profile.currentCrops : [])
+                    setCustomCropsDraft(
+                      Array.isArray(profile?.customCrops) ? normalizeCustomGrowLabels(profile.customCrops) : []
+                    )
+                    setCustomGrowInput('')
                     setProfileOpen(true)
                   }}
                 >
@@ -2957,23 +3051,38 @@ export default function SoilSenseApp() {
           ) : null}
 
           {activeTab === 'guide' ? (
-            <section className="dashboard">
-              <header className="dashboard-header">
+            <section className="dashboard guide-dashboard">
+              <header className="dashboard-header guide-dashboard-header">
                 <h1 className="dashboard-title">{t('guide.guideTitle')}</h1>
                 <p className="dashboard-subtitle">{t('guide.guideSubtitle')}</p>
               </header>
-              <section className="card">
-                <div className="card-body">
-                  <div className="guide-insights-scroll">
-                    <EducationalGuide
-                      coords={coords || null}
-                      climateZoneHint={deriveClimateZoneHintFromWeatherSignals(
-                        smartWeatherSignals && typeof smartWeatherSignals === 'object' ? smartWeatherSignals : {}
-                      )}
-                      activityImpact={activityImpact || null}
-                    />
-                  </div>
 
+              <section className="card guide-card-articles guide-insights-scroll">
+                <div className="card-top">
+                  <div className="card-title-wrap">
+                    <h2 className="card-title">{t('guide.articlesCardTitle')}</h2>
+                  </div>
+                  <div className="card-hint">{t('guide.articlesCardHint')}</div>
+                </div>
+                <div className="card-body guide-card-body-reading">
+                  <EducationalGuide
+                    coords={coords || null}
+                    climateZoneHint={deriveClimateZoneHintFromWeatherSignals(
+                      smartWeatherSignals && typeof smartWeatherSignals === 'object' ? smartWeatherSignals : {}
+                    )}
+                    activityImpact={activityImpact || null}
+                  />
+                </div>
+              </section>
+
+              <section className="card guide-card-hub">
+                <div className="card-top">
+                  <div className="card-title-wrap">
+                    <h2 className="card-title">{t('common.knowledgeHub')}</h2>
+                  </div>
+                  <div className="card-hint">{t('guide.knowledgeCardHint')}</div>
+                </div>
+                <div className="card-body">
                   {hubStatus === 'idle' || hubStatus === 'loading' ? (
                     <p className="muted">
                       {hubStatus === 'loading'
@@ -2991,16 +3100,12 @@ export default function SoilSenseApp() {
 
                   {hubStatus === 'success' && knowledgeHub ? (
                     <div className="knowledge-hub">
-                      <div className="knowledge-hub-title">{t('common.knowledgeHub')}</div>
-                      {Array.isArray(knowledgeHub.categories) &&
-                      knowledgeHub.categories.length ? (
+                      {Array.isArray(knowledgeHub.categories) && knowledgeHub.categories.length ? (
                         <div className="knowledge-grid">
                           {knowledgeHub.categories.map((c) => (
                             <div key={c.name} className="knowledge-category">
                               <p className="knowledge-category-title">{c.name}</p>
-                              {c.summary ? (
-                                <p className="muted knowledge-summary">{c.summary}</p>
-                              ) : null}
+                              {c.summary ? <p className="muted knowledge-summary">{c.summary}</p> : null}
                               {Array.isArray(c.bullets) && c.bullets.length ? (
                                 <ul className="knowledge-bullets">
                                   {c.bullets.map((b, idx) => (
@@ -3074,8 +3179,11 @@ export default function SoilSenseApp() {
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <input
                       className="field-input"
+                      type="number"
                       value={fieldSizeDraft}
                       inputMode="decimal"
+                      min={0}
+                      step="any"
                       onChange={(e) => setFieldSizeDraft(e.target.value)}
                       placeholder="e.g., 1000"
                       style={{ flex: 1 }}
@@ -3145,6 +3253,9 @@ export default function SoilSenseApp() {
                   <p className="field-label" style={{ marginBottom: 6 }}>
                     {t('profile.currentCropsLabel')}
                   </p>
+                  <p className="muted" style={{ margin: '0 0 10px', fontSize: 13, lineHeight: 1.45 }}>
+                    {t('profile.suggestedCropsHint')}
+                  </p>
                   <div style={{ display: 'grid', gap: 6 }}>
                     {availableCrops.map((crop) => {
                       const checked = currentCropsDraft.includes(crop.id)
@@ -3164,6 +3275,67 @@ export default function SoilSenseApp() {
                       )
                     })}
                   </div>
+                </div>
+
+                <div style={{ marginTop: 14 }}>
+                  <p className="field-label" style={{ marginBottom: 6 }}>
+                    {t('profile.customGrowLabel')}
+                  </p>
+                  <p className="muted" style={{ margin: '0 0 10px', fontSize: 13, lineHeight: 1.45 }}>
+                    {t('profile.customGrowHint')}
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <input
+                      className="field-input"
+                      style={{ flex: 1, minWidth: 160 }}
+                      value={customGrowInput}
+                      onChange={(e) => setCustomGrowInput(e.target.value)}
+                      placeholder={t('profile.customGrowPlaceholder')}
+                      maxLength={48}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return
+                        e.preventDefault()
+                        const v = customGrowInput.trim().slice(0, 48)
+                        if (!v) return
+                        setCustomCropsDraft((prev) => normalizeCustomGrowLabels([...prev, v]))
+                        setCustomGrowInput('')
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-inline"
+                      onClick={() => {
+                        const v = customGrowInput.trim().slice(0, 48)
+                        if (!v) return
+                        setCustomCropsDraft((prev) => normalizeCustomGrowLabels([...prev, v]))
+                        setCustomGrowInput('')
+                      }}
+                    >
+                      {t('profile.customGrowAdd')}
+                    </button>
+                  </div>
+                  {customCropsDraft.length ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+                      {customCropsDraft.map((name) => (
+                        <span
+                          key={name}
+                          className="chip"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, paddingRight: 6 }}
+                        >
+                          <span>{name}</span>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-inline"
+                            style={{ padding: '2px 6px', minHeight: 0, fontSize: 16, lineHeight: 1 }}
+                            aria-label={t('profile.customGrowRemove')}
+                            onClick={() => setCustomCropsDraft((prev) => prev.filter((x) => x !== name))}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
 
                 <p className="muted" style={{ marginTop: 10 }}>
@@ -3196,6 +3368,12 @@ export default function SoilSenseApp() {
                       : '-'}{' '}
                     | {typeof profile?.workforce === 'number' ? profile.workforce : '-'}
                   </p>
+                  {buildCropTypesForAdvice(profile, t).length ? (
+                    <p className="muted" style={{ margin: '8px 0 0', fontSize: 13, lineHeight: 1.45 }}>
+                      <span style={{ fontWeight: 800 }}>{t('profile.growingSummaryLabel')}</span>{' '}
+                      {buildCropTypesForAdvice(profile, t).join(', ')}
+                    </p>
+                  ) : null}
                 </section>
 
                 <div className="key-actions">

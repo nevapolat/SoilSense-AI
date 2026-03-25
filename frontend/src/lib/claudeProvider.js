@@ -699,6 +699,7 @@ export async function generateDailyTasks({
   correlationId,
   profile,
   activityImpact,
+  preferredCropsSummary,
 } = {}) {
   const t0 = performance.now()
   const model = getResolvedClaudeModelName()
@@ -739,6 +740,11 @@ Farmer context (personalization + constraints):
         .join(', ')
     : 'manual tools only'
 }
+- Crops/plants the farmer is growing (from profile): ${
+    typeof preferredCropsSummary === 'string' && preferredCropsSummary.trim()
+      ? preferredCropsSummary.trim()
+      : 'not specified'
+  }
 - Recent activity (last ~7 days):
   - Organic inputs: ${typeof activityImpact?.organicKg === 'number' ? activityImpact.organicKg : 0} kg across ${
     typeof activityImpact?.organicCount === 'number' ? activityImpact.organicCount : 0
@@ -754,6 +760,7 @@ Constraints:
 - If no tractor is available, avoid mechanized tasks that require a tractor.
 - If no drip irrigation is available, avoid drip-specific irrigation tasks.
 - If chemical pesticides were applied recently, prioritize monitoring + soil biology recovery and avoid recommending further chemical sprays.
+- If specific crops/plants are listed above, tailor at least one task to their needs (soil prep, irrigation, scouting, or organic matter).
 
 Return ONLY strict JSON (no markdown, no commentary) with this schema:
 {
