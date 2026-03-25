@@ -325,75 +325,91 @@ export function getRememberedEmail() {
   }
 }
 
+function parseAuthDbPayload(raw) {
+  if (!raw || typeof raw !== 'string') return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.users)) return parsed.users
+  } catch {
+    // ignore
+  }
+  return null
+}
+
+/** Prefer the record that still has a usable password hash (PBKDF2 object). */
+function pickBetterUser(a, b) {
+  if (!a?.email) return b
+  if (!b?.email) return a
+  const aHas = a.password && typeof a.password === 'object'
+  const bHas = b.password && typeof b.password === 'object'
+  if (bHas && !aHas) return b
+  if (aHas && !bHas) return a
+  return a
+}
+
+/**
+ * Merge local accounts from every place they may have been stored (primary key, session mirror,
+ * scoped keys from older builds, or any soilsense* key that looks like an auth DB export).
+ */
+function loadLocalUsersMerged() {
+  const byEmail = new Map()
+
+  function ingestUser(u) {
+    if (!u || typeof u !== 'object') return
+    const ne = normalizeEmail(u.email)
+    if (!ne || !u.id) return
+    const prev = byEmail.get(ne)
+    byEmail.set(ne, prev ? pickBetterUser(prev, u) : u)
+  }
+
+  function ingestFromRaw(raw) {
+    const list = parseAuthDbPayload(raw)
+    if (!list) return
+    for (const u of list) ingestUser(u)
+  }
+
+  ingestFromRaw(authLocalGet(AUTH_DB_KEY))
+  ingestFromRaw(authSessionGet(AUTH_DB_MIRROR_KEY))
+
+  try {
+    const ls = window.localStorage
+    for (let i = 0; i < ls.length; i += 1) {
+      const k = ls.key(i)
+      if (typeof k !== 'string' || k === AUTH_DB_KEY) continue
+      if (!k.includes('soilsense')) continue
+      const looksLikeAuthDb =
+        k.endsWith(AUTH_DB_KEY) || k.includes('soilsense.auth.db') || /soilsense[^.]*auth\.db/.test(k)
+      if (!looksLikeAuthDb) continue
+      ingestFromRaw(nativeLocalGet ? nativeLocalGet(k) : authLocalGet(k))
+    }
+  } catch {
+    // ignore
+  }
+
+  const users = [...byEmail.values()]
+  if (users.length > 0) {
+    const payload = JSON.stringify({ users })
+    try {
+      authLocalSet(AUTH_DB_KEY, payload)
+    } catch {
+      // localStorage full or blocked — keep session mirror so login can still recover next load.
+    }
+    try {
+      authSessionSet(AUTH_DB_MIRROR_KEY, payload)
+    } catch {
+      // ignore
+    }
+  }
+
+  return users
+}
+
 function loadDb() {
   if (isRemoteAuth()) {
     if (!remoteUserCache?.user) return { users: [] }
     return { users: [remoteUserCache.user] }
   }
-  let users = []
-  try {
-    const raw = authLocalGet(AUTH_DB_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      if (parsed && typeof parsed === 'object' && Array.isArray(parsed.users)) {
-        users = parsed.users
-      }
-    }
-  } catch {
-    users = []
-  }
-
-  if (users.length === 0) {
-    try {
-      const mirrorRaw = authSessionGet(AUTH_DB_MIRROR_KEY)
-      if (mirrorRaw) {
-        const parsed = JSON.parse(mirrorRaw)
-        if (parsed && typeof parsed === 'object' && Array.isArray(parsed.users) && parsed.users.length > 0) {
-          users = parsed.users
-          try {
-            authLocalSet(AUTH_DB_KEY, JSON.stringify({ users }))
-          } catch {
-            // ignore
-          }
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  // Recover accounts that were written under scoped keys before shared-key bypass existed.
-  if (users.length === 0) {
-    const merged = new Map()
-    try {
-      const ls = window.localStorage
-      for (let i = 0; i < ls.length; i += 1) {
-        const k = ls.key(i)
-        if (typeof k !== 'string' || k === AUTH_DB_KEY) continue
-        if (!k.endsWith(AUTH_DB_KEY)) continue
-        const altRaw = authLocalGet(k)
-        if (!altRaw) continue
-        const altParsed = JSON.parse(altRaw)
-        const altUsers = Array.isArray(altParsed?.users) ? altParsed.users : []
-        for (const u of altUsers) {
-          const ne = normalizeEmail(u?.email)
-          if (ne && !merged.has(ne)) merged.set(ne, u)
-        }
-      }
-    } catch {
-      // ignore
-    }
-    if (merged.size > 0) {
-      users = [...merged.values()]
-      try {
-        authLocalSet(AUTH_DB_KEY, JSON.stringify({ users }))
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  return { users }
+  return { users: loadLocalUsersMerged() }
 }
 
 function saveDb(db) {
@@ -408,7 +424,11 @@ function saveDb(db) {
     return
   }
   const serialized = JSON.stringify(db)
-  authLocalSet(AUTH_DB_KEY, serialized)
+  try {
+    authLocalSet(AUTH_DB_KEY, serialized)
+  } catch {
+    // Quota / private mode: mirror still helps until tab closes.
+  }
   try {
     authSessionSet(AUTH_DB_MIRROR_KEY, serialized)
   } catch {
