@@ -1159,7 +1159,7 @@ function AppRoot() {
       <div className="app-session-scroll">
         {session?.userId ? (
           <header className="app-session-header" role="banner">
-            <div style={{ position: 'relative' }}>
+            <div className="lang-dropdown-anchor">
               <button
                 type="button"
                 className="lang-icon-btn"
