@@ -27,11 +27,12 @@ export default function SoilVitalityScore({
             <svg width="140" height="140" viewBox="0 0 140 140">
               <defs>
                 <linearGradient id="scoreGradient" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.95" />
-                  <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.95" />
+                  <stop offset="0%" stopColor="var(--accent-lime)" stopOpacity="0.98" />
+                  <stop offset="55%" stopColor="var(--accent-lime-mid)" stopOpacity="0.98" />
+                  <stop offset="100%" stopColor="var(--accent-lime-dark)" stopOpacity="0.98" />
                 </linearGradient>
               </defs>
-              <circle cx="70" cy="70" r={r} fill="none" stroke="rgba(0,0,0,0.06)" strokeWidth="12" />
+              <circle cx="70" cy="70" r={r} fill="none" stroke="rgba(20, 83, 45, 0.1)" strokeWidth="12" />
               <circle
                 cx="70"
                 cy="70"

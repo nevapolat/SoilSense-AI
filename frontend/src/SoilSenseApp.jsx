@@ -1,5 +1,5 @@
 import './App.css'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { BadgeCheck, BookOpen, Leaf, TreePine, Camera, Sun, Droplet, Map } from 'lucide-react'
 import {
   generateKnowledgeHub,
@@ -975,7 +975,9 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     return () => window.clearInterval(timer)
   }, [])
 
-  useEffect(() => {
+  // Apply persisted tasks for this day+language before paint so we never flash task copy from the
+  // previous locale (e.g. German bodies under English headings after switching language).
+  useLayoutEffect(() => {
     const loaded = loadDailyTasksForDay(dailyTasksDayKey, lang)
     if (loaded.tasks.length) {
       setDailyTasks(loaded.tasks)
@@ -987,6 +989,14 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
       setDailyTasksStatus('idle')
     }
   }, [dailyTasksDayKey, lang])
+
+  const prevLangForDailyTasksRef = useRef(null)
+  useEffect(() => {
+    if (prevLangForDailyTasksRef.current !== null && prevLangForDailyTasksRef.current !== lang) {
+      forceDailyTasksRefreshRef.current = true
+    }
+    prevLangForDailyTasksRef.current = lang
+  }, [lang])
 
   function toggleTaskCompleted(taskId) {
     const id = String(taskId)
@@ -1122,7 +1132,14 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     const pesticideDose = fieldAreaHa && fieldAreaHa > 0 ? chemicalPesticideLiters / fieldAreaHa : chemicalPesticideLiters
     const chemicalFertilizerDose = fieldAreaHa && fieldAreaHa > 0 ? chemicalFertilizerKg / fieldAreaHa : chemicalFertilizerKg
 
-    const organicDoseFactor = organicDose > 0 ? Math.log(1 + organicDose) / Math.log(1 + 5) : 0
+    // Organic matter impact: log curve with a high reference dose (kg/ha or total kg if no field area)
+    // so large single entries (e.g. 1000 kg compost) give diminishing returns and cannot spike the
+    // score to 100. Factor is capped at 1.
+    const ORG_DOSE_REF = 100
+    const organicDoseFactor =
+      organicDose > 0
+        ? Math.min(1, Math.log(1 + organicDose) / Math.log(1 + ORG_DOSE_REF))
+        : 0
     const pesticideDoseFactor = pesticideDose > 0 ? Math.log(1 + pesticideDose) / Math.log(1 + 5) : 0
     const chemicalFertilizerDoseFactor =
       chemicalFertilizerDose > 0 ? Math.log(1 + chemicalFertilizerDose) / Math.log(1 + 5) : 0
@@ -1134,7 +1151,8 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
       chemicalFertilizerCount > 0 ? Math.min(1.3, 1 + 0.08 * Math.max(0, chemicalFertilizerCount - 1)) : 1
 
     // Soil health: compost improves structure + biology; pesticides reduce them.
-    const organicSoilDelta = organicDoseFactor * organicFreq * 16 * soilTypeOrganicMultiplier
+    // Coefficient kept moderate so weekly organic activity nudges the score, not maxes it.
+    const organicSoilDelta = organicDoseFactor * organicFreq * 10 * soilTypeOrganicMultiplier
     const pesticideSoilDelta = -pesticideDoseFactor * pesticideFreq * 22
     const chemicalFertilizerSoilDelta = -chemicalFertilizerDoseFactor * chemicalFertilizerFreq * 9
 
@@ -2257,6 +2275,8 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
   }, [profile?.address, geoStatus])
 
   // If the user changes language, re-run Smart Alert so Gemini responses update immediately.
+  // (Daily tasks refresh is also queued in a separate lang effect so it still runs when the user
+  // was not on the dashboard when switching language.)
   useEffect(() => {
     if (activeTab !== 'dashboard') return
     if (geoStatus !== 'success') return
