@@ -3,6 +3,7 @@ import { createLogger, normalizeErrorForLog } from './logger'
 import { extractJson } from './llmJson.js'
 import {
   REG_AGRI_EXPERT_PERSONA,
+  buildJsonTaskLanguageConstraint,
   buildLanguageInstruction,
   formatCoords,
   normalizeInventory,
@@ -778,7 +779,8 @@ Return ONLY strict JSON (no markdown, no commentary) with this schema:
 Rules:
 - tasks array length must be 3
 - steps array length must be 3-6
-- estimatedMinutes between 5 and 45`
+- estimatedMinutes between 5 and 45
+${buildJsonTaskLanguageConstraint(lang)}`
 
   try {
     const text = await generateClaudeText(prompt)

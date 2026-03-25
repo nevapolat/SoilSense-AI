@@ -12,6 +12,9 @@ interface ImportMetaEnv {
   readonly VITE_LLM_PROVIDER?: string
   readonly VITE_ANTHROPIC_API_KEY?: string
   readonly VITE_CLAUDE_MODEL?: string
+  /** When set with VITE_SUPABASE_ANON_KEY, accounts sync across devices (Supabase Auth + user_profiles). */
+  readonly VITE_SUPABASE_URL?: string
+  readonly VITE_SUPABASE_ANON_KEY?: string
 }
 
 interface ImportMeta {

@@ -12,6 +12,14 @@ export function buildLanguageInstruction(lang) {
     : ''
 }
 
+/** Extra constraint for JSON daily-tasks payloads so visible strings match the UI locale. */
+export function buildJsonTaskLanguageConstraint(lang) {
+  const languageName = getLanguageDisplayName(lang)
+  return languageName
+    ? `JSON language rule: every string in tasks[].title, tasks[].whyThisTaskHelps, and each tasks[].steps[] entry MUST be written in ${languageName}. Do not leave these user-facing strings in English unless the target language is English.`
+    : ''
+}
+
 export function formatCoords(latitude, longitude) {
   if (latitude == null || longitude == null) return 'Location not provided.'
   const lat = Number(latitude).toFixed(5)

@@ -202,49 +202,34 @@ const STEP_TAB_MAP = {
   scan: 'scan',
 }
 
+/** Stable anchors in the DOM (see SoilSenseApp / FieldPlanner / PlantScanner). */
+const STEP_DATA_TOUR = {
+  fieldProfile: 'field-profile',
+  smartAlerts: 'smart-alerts',
+  activityLog: 'activity-log',
+  soilAdvisor: 'soil-advisor',
+  planner: 'field-planner',
+  compost: 'compost-panel',
+  educationalGuides: 'educational-guides',
+  scan: 'plant-scan',
+}
+
 function clickTab(tabId) {
-  const tabIndexById = {
-    dashboard: 0,
-    planner: 1,
-    compost: 2,
-    guide: 3,
-    scan: 4,
-  }
-  const idx = tabIndexById[tabId]
-  if (typeof idx !== 'number') return
-  const navButtons = document.querySelectorAll('.bottom-nav .nav-item')
-  const button = navButtons?.[idx]
-  if (button instanceof HTMLButtonElement) button.click()
+  const btn = document.querySelector(`.bottom-nav button[data-tab-id="${tabId}"]`)
+  if (btn instanceof HTMLButtonElement) btn.click()
 }
 
 function getTargetElement(stepKey) {
-  if (stepKey === 'fieldProfile') return document.querySelector('.dashboard-header .btn.btn-ghost.btn-inline')
-  if (stepKey === 'smartAlerts') return document.querySelector('.smart-alert-card')
-  if (stepKey === 'activityLog') return document.querySelector('.dashboard-stack .ordered-list')?.closest('.card')
-  if (stepKey === 'soilAdvisor') {
-    const cards = Array.from(document.querySelectorAll('.dashboard-stack .card'))
-    return cards.find((card) => card.querySelector('.advice-pre') || card.textContent?.includes('Soil Health Advisor')) || null
+  const tourId = STEP_DATA_TOUR[stepKey]
+  if (tourId) {
+    const marked = document.querySelector(`[data-tour="${tourId}"]`)
+    if (marked instanceof HTMLElement) return marked
   }
-  if (stepKey === 'planner')
-    return document.querySelector('.dashboard .selected-list')?.closest('.card') || document.querySelector('.bottom-nav .nav-item:nth-child(2)')
-  if (stepKey === 'compost')
-    return (
-      document.querySelector('.compost-wizard-title')?.closest('.card') ||
-      document.querySelector('.dashboard .card') ||
-      document.querySelector('.bottom-nav .nav-item:nth-child(3)')
-    )
-  if (stepKey === 'educationalGuides')
-    return (
-      document.querySelector('.guide-card-articles') ||
-      document.querySelector('.guide-insights-scroll') ||
-      document.querySelector('.bottom-nav .nav-item:nth-child(4)')
-    )
-  if (stepKey === 'scan')
-    return (
-      document.querySelector('.scanner-grid')?.closest('.card') ||
-      document.querySelector('.diagnostic-card') ||
-      document.querySelector('.bottom-nav .nav-item:nth-child(5)')
-    )
+
+  const tabId = STEP_TAB_MAP[stepKey]
+  const tabBtn = tabId ? document.querySelector(`.bottom-nav button[data-tab-id="${tabId}"]`) : null
+  if (tabBtn instanceof HTMLElement) return tabBtn
+
   return null
 }
 
@@ -259,39 +244,68 @@ export default function GuideTour({ open, onClose }) {
 
   useEffect(() => {
     if (!open) return
-    clickTab(STEP_TAB_MAP[currentStepKey] || 'dashboard')
-  }, [open, currentStepKey])
 
-  useEffect(() => {
-    if (!open) return
-    const updateRect = () => {
-      const el = getTargetElement(currentStepKey)
-      if (!el) {
-        setTargetRect(null)
-        return
-      }
+    clickTab(STEP_TAB_MAP[currentStepKey] || 'dashboard')
+
+    let cancelled = false
+    let timeoutId = null
+    let attempts = 0
+    const maxAttempts = 48
+
+    const applyRectFromEl = (el) => {
       const rect = el.getBoundingClientRect()
+      if (rect.width < 2 || rect.height < 2) return false
       setTargetRect({
         top: Math.max(8, rect.top - 8),
         left: Math.max(8, rect.left - 8),
         width: rect.width + 16,
         height: rect.height + 16,
       })
+      return true
     }
-    const id = window.setTimeout(updateRect, 120)
-    window.addEventListener('resize', updateRect)
-    window.addEventListener('scroll', updateRect, true)
+
+    const measure = () => {
+      if (cancelled) return
+      const el = getTargetElement(currentStepKey)
+      if (el && applyRectFromEl(el)) return
+      attempts += 1
+      if (attempts >= maxAttempts) {
+        setTargetRect(null)
+        return
+      }
+      timeoutId = window.setTimeout(measure, 80)
+    }
+
+    const onResizeOrScroll = () => {
+      if (cancelled) return
+      const el = getTargetElement(currentStepKey)
+      if (el) applyRectFromEl(el)
+    }
+
+    window.addEventListener('resize', onResizeOrScroll)
+    window.addEventListener('scroll', onResizeOrScroll, true)
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        measure()
+      })
+    })
+
     return () => {
-      window.clearTimeout(id)
-      window.removeEventListener('resize', updateRect)
-      window.removeEventListener('scroll', updateRect, true)
+      cancelled = true
+      if (timeoutId != null) window.clearTimeout(timeoutId)
+      window.removeEventListener('resize', onResizeOrScroll)
+      window.removeEventListener('scroll', onResizeOrScroll, true)
     }
   }, [open, currentStepKey])
 
   useEffect(() => {
     if (open) return
-    setStepIndex(0)
-    setTargetRect(null)
+    const id = requestAnimationFrame(() => {
+      setStepIndex(0)
+      setTargetRect(null)
+    })
+    return () => cancelAnimationFrame(id)
   }, [open])
 
   if (!open) return null

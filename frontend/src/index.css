@@ -74,6 +74,7 @@ body {
   text-align: left;
   border-inline: none;
   min-height: 100svh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;

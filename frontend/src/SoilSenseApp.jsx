@@ -1,6 +1,6 @@
 import './App.css'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BadgeCheck, BookOpen, Leaf, TreePine, Camera, Globe2, Sun, Droplet, Map } from 'lucide-react'
+import { BadgeCheck, BookOpen, Leaf, TreePine, Camera, Sun, Droplet, Map } from 'lucide-react'
 import {
   generateKnowledgeHub,
   generateFarmDailyInsight,
@@ -26,6 +26,7 @@ import {
   buildCropDrivenDailyTasks,
   buildCropTypesForAdvice,
   buildFieldPlan,
+  createFallbackFieldPlan,
   getAvailableCrops,
   hasUserGrowSelections,
   normalizeCustomGrowLabels,
@@ -42,12 +43,12 @@ import {
   loadFarmMemory,
   resolveFarmLocationContext,
 } from './lib/farmMemory'
+import { fetchOpenMeteoSignals } from './lib/openMeteo'
 
 const storageLog = createLogger('storage')
 const geoLog = createLogger('geo')
 const uiLog = createLogger('ui')
 const appLog = createLogger('app')
-const weatherLog = createLogger('weather')
 
 function coordsKey(c) {
   // Small rounding so repeated measurements don't re-trigger AI calls constantly.
@@ -103,6 +104,17 @@ const ACTIVITY_TYPES = [
   { id: 'pesticide-application', category: 'pesticide', defaultQuantity: 1, defaultUnit: 'liters' },
   { id: 'fertilizer-application', category: 'fertilizer', defaultQuantity: 1, defaultUnit: 'kg' },
 ]
+
+function activityUnitOptionsForType(typeId) {
+  if (typeId === 'pesticide-application') return ['liters', 'kg', 'g']
+  if (
+    typeId === 'added-compost' ||
+    typeId === 'used-organic-fertilizer' ||
+    typeId === 'fertilizer-application'
+  )
+    return ['kg', 'bags']
+  return ['liters', 'kg']
+}
 
 function loadProfile() {
   try {
@@ -176,6 +188,48 @@ function loadActivityLog() {
   } catch (err) {
     storageLog.warn('storage.read.failed', { key: ACTIVITY_LOG_STORAGE_KEY, ...normalizeErrorForLog(err) })
     return []
+  }
+}
+
+function persistActivityLogEntries(next) {
+  try {
+    const payload = JSON.stringify(next)
+    localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, payload)
+    storageLog.info('storage.write', {
+      key: ACTIVITY_LOG_STORAGE_KEY,
+      bytes: payload.length,
+      count: next.length,
+    })
+  } catch (err) {
+    storageLog.warn('storage.write.failed', { key: ACTIVITY_LOG_STORAGE_KEY, ...normalizeErrorForLog(err) })
+  }
+}
+
+function dailyTasksTasksStorageKey(dayKey, lang) {
+  const l = typeof lang === 'string' && lang.trim() ? lang.trim().toLowerCase() : 'en'
+  return `soilsense.dailyTasks.${l}.${dayKey}`
+}
+
+function dailyTasksCompletedStorageKey(dayKey, lang) {
+  const l = typeof lang === 'string' && lang.trim() ? lang.trim().toLowerCase() : 'en'
+  return `soilsense.dailyTasksCompleted.${l}.${dayKey}`
+}
+
+function loadDailyTasksForDay(dayKey, lang) {
+  try {
+    const scopedTasksKey = dailyTasksTasksStorageKey(dayKey, lang)
+    const scopedDoneKey = dailyTasksCompletedStorageKey(dayKey, lang)
+    let tasksRaw = localStorage.getItem(scopedTasksKey)
+    let doneRaw = localStorage.getItem(scopedDoneKey)
+    if (!doneRaw) doneRaw = localStorage.getItem(`soilsense.dailyTasksCompleted.${dayKey}`)
+    const tasks = tasksRaw ? JSON.parse(tasksRaw) : null
+    const done = doneRaw ? JSON.parse(doneRaw) : null
+    return {
+      tasks: Array.isArray(tasks) ? tasks : [],
+      completed: Array.isArray(done) ? done : [],
+    }
+  } catch {
+    return { tasks: [], completed: [] }
   }
 }
 
@@ -520,159 +574,6 @@ function buildDailyTasksFallback(signals, t) {
   ]
 }
 
-async function fetchOpenMeteoSignals(latitude, longitude, { correlationId } = {}) {
-  const t0 = performance.now()
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(
-    latitude
-  )}&longitude=${encodeURIComponent(
-    longitude
-  )}&current=temperature_2m,relative_humidity_2m,dew_point_2m,precipitation,wind_speed_10m,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&hourly=temperature_2m,dew_point_2m&forecast_hours=48&past_days=1&forecast_days=2&timezone=auto`
-
-  weatherLog.info('weather.openMeteo.request.start', { correlationId })
-  let res
-  try {
-    res = await fetch(url)
-  } catch (err) {
-    weatherLog.error(
-      'weather.openMeteo.request.error',
-      { ...normalizeErrorForLog(err), phase: 'fetch' },
-      { correlationId, durationMs: performance.now() - t0 }
-    )
-    throw err
-  }
-
-  if (!res.ok) {
-    weatherLog.warn(
-      'weather.openMeteo.request.error',
-      { httpStatus: res.status, phase: 'http' },
-      { correlationId, durationMs: performance.now() - t0 }
-    )
-    throw new Error(`Weather request failed: HTTP ${res.status}`)
-  }
-
-  const data = await res.json()
-
-  const current = data?.current || {}
-  const daily = data?.daily || {}
-
-  const tempNowC = typeof current.temperature_2m === 'number' ? current.temperature_2m : null
-  const humidityNowPct =
-    typeof current.relative_humidity_2m === 'number' ? current.relative_humidity_2m : null
-  const dewPointNowC =
-    typeof current.dew_point_2m === 'number' ? current.dew_point_2m : null
-  const windKph = typeof current.wind_speed_10m === 'number' ? current.wind_speed_10m : null
-  const precipNowMm = typeof current.precipitation === 'number' ? current.precipitation : null
-
-  const tempMaxC =
-    Array.isArray(daily.temperature_2m_max) && daily.temperature_2m_max.length
-      ? daily.temperature_2m_max[0]
-      : null
-  const tempMinC =
-    Array.isArray(daily.temperature_2m_min) && daily.temperature_2m_min.length
-      ? daily.temperature_2m_min[0]
-      : null
-  const precipitationSumMm =
-    Array.isArray(daily.precipitation_sum) && daily.precipitation_sum.length
-      ? daily.precipitation_sum[0]
-      : null
-  const precipitationYesterdayMm =
-    Array.isArray(daily.precipitation_sum) && daily.precipitation_sum.length > 1
-      ? daily.precipitation_sum[1]
-      : null
-
-  const hourly = data?.hourly || {}
-  const hourlyTime = Array.isArray(hourly.time) ? hourly.time : []
-  const hourlyTempC = Array.isArray(hourly.temperature_2m) ? hourly.temperature_2m : []
-  const hourlyDewPointC = Array.isArray(hourly.dew_point_2m) ? hourly.dew_point_2m : []
-
-  const forecastLen = Math.min(hourlyTime.length, hourlyTempC.length, hourlyDewPointC.length)
-  const next48hTime = forecastLen ? hourlyTime.slice(0, forecastLen) : []
-  const next48hTempC = forecastLen ? hourlyTempC.slice(0, forecastLen) : []
-  const next48hDewPointC = forecastLen ? hourlyDewPointC.slice(0, forecastLen) : []
-
-  // Precompute frost threshold crossings for deterministic fallback.
-  const frostThresholdC = 2.0
-  const nowTs = (() => {
-    const currentTimeStr = typeof current.time === 'string' ? current.time : null
-    if (!currentTimeStr) return Date.now()
-    const ts = new Date(currentTimeStr).getTime()
-    return Number.isFinite(ts) ? ts : Date.now()
-  })()
-
-  let next48hMinTempC = null
-  for (const t of next48hTempC) {
-    if (typeof t !== 'number') continue
-    if (next48hMinTempC == null) next48hMinTempC = t
-    else next48hMinTempC = Math.min(next48hMinTempC, t)
-  }
-
-  let firstBelow2CInHours = null
-  for (let i = 0; i < next48hTempC.length; i++) {
-    const t = next48hTempC[i]
-    const timeStr = next48hTime[i]
-    if (typeof t !== 'number' || t >= frostThresholdC) continue
-    const ts = new Date(timeStr).getTime()
-    if (!Number.isFinite(ts)) continue
-    firstBelow2CInHours = (ts - nowTs) / (1000 * 60 * 60)
-    break
-  }
-
-  const humidityBucket =
-    typeof humidityNowPct === 'number'
-      ? humidityNowPct < 40
-        ? 'low'
-        : humidityNowPct < 70
-          ? 'mid'
-          : 'high'
-      : 'unknown'
-  const sunBucket =
-    typeof tempNowC === 'number'
-      ? tempNowC < 15
-        ? 'cool'
-        : tempNowC <= 28
-          ? 'warm'
-          : 'hot'
-      : 'unknown'
-
-  weatherLog.info(
-    'weather.openMeteo.request.complete',
-    {
-      httpStatus: res.status,
-      hoursFetched: forecastLen,
-      minTempWindowC: next48hMinTempC,
-      frostRisk48h:
-        (typeof firstBelow2CInHours === 'number' ? firstBelow2CInHours <= 48 : false) ||
-        (typeof next48hMinTempC === 'number' ? next48hMinTempC < frostThresholdC : false),
-      humidityBucket,
-      sunBucket,
-    },
-    { correlationId, durationMs: performance.now() - t0 }
-  )
-
-  return {
-    tempNowC,
-    humidityNowPct,
-    dewPointNowC,
-    windKph,
-    precipNowMm,
-    tempMaxC,
-    tempMinC,
-    precipitationSumMm,
-    precipitationYesterdayMm,
-    weatherCode: current.weather_code ?? null,
-    frostThresholdC,
-    next48hMinTempC,
-    firstBelow2CInHours,
-    humidityBucket,
-    sunBucket,
-    next48hHourly: {
-      time: next48hTime,
-      temperature2mC: next48hTempC,
-      dewPoint2mC: next48hDewPointC,
-    },
-  }
-}
-
 function deriveClimateZoneHintFromWeatherSignals(signals) {
   // Heuristic "climate zone" hint for the Soil Health Advisor.
   // (We don't store a formal Köppen classification in this app, but we can still tailor guidance
@@ -703,24 +604,8 @@ function deriveClimateZoneHintFromWeatherSignals(signals) {
   return 'Temperate'
 }
 
-export default function SoilSenseApp() {
-  const { lang, changeLanguage: i18nChangeLanguage, t } = useI18n()
-  const [isLangMenuOpen, setIsLangMenuOpen] = useState(false)
-
-  const languageMenuItems = useMemo(
-    () => [
-      { code: 'tr', label: 'Turkish' },
-      { code: 'en', label: 'English' },
-      { code: 'es', label: 'Spanish' },
-      { code: 'de', label: 'German' },
-      { code: 'zh', label: 'Chinese' },
-    ],
-    []
-  )
-
-  function changeLanguage(code) {
-    i18nChangeLanguage(code)
-  }
+export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabChange } = {}) {
+  const { lang, t } = useI18n()
 
   function tl(key, fallback) {
     const value = t(key)
@@ -740,6 +625,11 @@ export default function SoilSenseApp() {
   )
 
   const [activeTab, setActiveTab] = useState('dashboard')
+
+  // Let the parent adjust surrounding layout (e.g., hide the "My Fields" picker on Guide).
+  useEffect(() => {
+    if (typeof onActiveTabChange === 'function') onActiveTabChange(activeTab)
+  }, [activeTab, onActiveTabChange])
 
   // Task 3: Geolocation (more robust + user retry).
   const [geoStatus, setGeoStatus] = useState('idle') // idle|loading|success|error
@@ -812,11 +702,11 @@ export default function SoilSenseApp() {
     }
   }, [])
 
-  function addGreenPoints(points) {
-    const delta = Number(points)
-    if (!Number.isFinite(delta) || delta <= 0) return
+  function adjustGreenPoints(delta) {
+    const d = Number(delta)
+    if (!Number.isFinite(d) || d === 0) return
     setGreenScore((prev) => {
-      const next = prev + delta
+      const next = Math.max(0, Math.min(100, prev + d))
       try {
         const payload = String(next)
         localStorage.setItem(GREEN_SCORE_KEY, payload)
@@ -826,6 +716,12 @@ export default function SoilSenseApp() {
       }
       return next
     })
+  }
+
+  function addGreenPoints(points) {
+    const delta = Number(points)
+    if (!Number.isFinite(delta) || delta <= 0) return
+    adjustGreenPoints(delta)
   }
 
   function addGreenPointsOnce(eventKey, points) {
@@ -896,6 +792,7 @@ export default function SoilSenseApp() {
   const [activityDraftPesticideKind, setActivityDraftPesticideKind] = useState('chemical')
   const [activityDraftFertilizerType, setActivityDraftFertilizerType] = useState('organic')
   const [activityDraftError, setActivityDraftError] = useState('')
+  const [activityEditDraft, setActivityEditDraft] = useState(null)
   const [profileSaveNotice, setProfileSaveNotice] = useState('')
 
   const [compostGuideOpen, setCompostGuideOpen] = useState(false)
@@ -1072,23 +969,6 @@ export default function SoilSenseApp() {
     return runIdRef.current
   }
 
-  function loadDailyTasksForDay(dayKey) {
-    try {
-      const tasksRaw = localStorage.getItem(`soilsense.dailyTasks.${dayKey}`)
-      const doneRaw = localStorage.getItem(
-        `soilsense.dailyTasksCompleted.${dayKey}`
-      )
-      const tasks = tasksRaw ? JSON.parse(tasksRaw) : null
-      const done = doneRaw ? JSON.parse(doneRaw) : null
-      return {
-        tasks: Array.isArray(tasks) ? tasks : [],
-        completed: Array.isArray(done) ? done : [],
-      }
-    } catch {
-      return { tasks: [], completed: [] }
-    }
-  }
-
   useEffect(() => {
     const syncDayKey = () => setDailyTasksDayKey(getTodayKey())
     const timer = window.setInterval(syncDayKey, 60 * 1000)
@@ -1096,7 +976,7 @@ export default function SoilSenseApp() {
   }, [])
 
   useEffect(() => {
-    const loaded = loadDailyTasksForDay(dailyTasksDayKey)
+    const loaded = loadDailyTasksForDay(dailyTasksDayKey, lang)
     if (loaded.tasks.length) {
       setDailyTasks(loaded.tasks)
       setCompletedTaskIds(loaded.completed)
@@ -1106,29 +986,30 @@ export default function SoilSenseApp() {
       setCompletedTaskIds(loaded.completed)
       setDailyTasksStatus('idle')
     }
-  }, [dailyTasksDayKey])
+  }, [dailyTasksDayKey, lang])
 
   function toggleTaskCompleted(taskId) {
     const id = String(taskId)
     setCompletedTaskIds((prev) => {
       const isDone = prev.includes(id)
-      const next = isDone ? prev : [...prev, id]
+      const next = isDone ? prev.filter((x) => String(x) !== id) : [...prev, id]
       try {
         const payload = JSON.stringify(next)
-        localStorage.setItem(`soilsense.dailyTasksCompleted.${dailyTasksDayKey}`, payload)
+        const doneKey = dailyTasksCompletedStorageKey(dailyTasksDayKey, lang)
+        localStorage.setItem(doneKey, payload)
         storageLog.info('storage.write', {
-          key: `soilsense.dailyTasksCompleted.${dailyTasksDayKey}`,
+          key: doneKey,
           bytes: payload.length,
         })
       } catch (err) {
         storageLog.warn('storage.write.failed', {
-          key: `soilsense.dailyTasksCompleted.${dailyTasksDayKey}`,
+          key: dailyTasksCompletedStorageKey(dailyTasksDayKey, lang),
           ...normalizeErrorForLog(err),
         })
       }
 
-      // Only award points the first time.
       if (!isDone) addGreenPoints(5)
+      else adjustGreenPoints(-5)
       return next
     })
   }
@@ -1310,19 +1191,28 @@ export default function SoilSenseApp() {
     }
   }, [activityLog, profile, recentActivities, dailyTasks, completedTaskIds])
 
-  const fieldPlan = useMemo(
-    () =>
-      buildFieldPlan({
+  const fieldPlan = useMemo(() => {
+    const intelZone =
+      typeof locationIntel?.climateZone === 'string' && locationIntel.climateZone.trim()
+        ? locationIntel.climateZone.trim()
+        : null
+    try {
+      return buildFieldPlan({
         profile,
         climateZoneHint:
-          locationIntel?.climateZone ||
+          intelZone ||
           deriveClimateZoneHintFromWeatherSignals(
             smartWeatherSignals && typeof smartWeatherSignals === 'object' ? smartWeatherSignals : {}
           ),
         activityImpact,
-      }),
-    [profile, smartWeatherSignals, activityImpact, locationIntel]
-  )
+      })
+    } catch (err) {
+      uiLog.warn('fieldPlanner.buildFailed', {
+        message: err?.message ? String(err.message) : String(err),
+      })
+      return createFallbackFieldPlan()
+    }
+  }, [profile, smartWeatherSignals, activityImpact, locationIntel])
 
   function applyActivityImpact(baseScore) {
     if (typeof baseScore !== 'number' || !Number.isFinite(baseScore)) return baseScore
@@ -1514,17 +1404,7 @@ export default function SoilSenseApp() {
         }
       }
       const next = [entry, ...prev].slice(0, 200)
-      try {
-        const payload = JSON.stringify(next)
-        localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, payload)
-        storageLog.info('storage.write', {
-          key: ACTIVITY_LOG_STORAGE_KEY,
-          bytes: payload.length,
-          count: next.length,
-        })
-      } catch (err) {
-        storageLog.warn('storage.write.failed', { key: ACTIVITY_LOG_STORAGE_KEY, ...normalizeErrorForLog(err) })
-      }
+      persistActivityLogEntries(next)
       return next
     })
     setActivityPickerOpen(false)
@@ -1541,6 +1421,68 @@ export default function SoilSenseApp() {
       timestamp: entry?.timestamp || Date.now(),
       pesticideKind: meta?.pesticideKind || null,
     })
+  }
+
+  function openActivityEdit(item) {
+    if (!item?.id) return
+    const typeId = item.activityTypeId
+    const def = ACTIVITY_TYPES.find((x) => x.id === typeId)
+    setActivityEditDraft({
+      id: item.id,
+      activityTypeId: typeId,
+      quantity: String(typeof item.quantity === 'number' ? item.quantity : ''),
+      unit: typeof item.unit === 'string' && item.unit.trim() ? item.unit : def?.defaultUnit || '',
+      pesticideKind: item.meta?.pesticideKind === 'biological' ? 'biological' : 'chemical',
+      fertilizerType: item.meta?.fertilizerType === 'chemical' ? 'chemical' : 'organic',
+      error: '',
+    })
+  }
+
+  function cancelActivityEdit() {
+    setActivityEditDraft(null)
+  }
+
+  function saveActivityEdit() {
+    if (!activityEditDraft) return
+    const quantity = Number(activityEditDraft.quantity)
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setActivityEditDraft((d) => (d ? { ...d, error: `${t('activity.quantityLabel')}: invalid` } : d))
+      return
+    }
+    const meta = {}
+    if (activityEditDraft.activityTypeId === 'pesticide-application')
+      meta.pesticideKind = activityEditDraft.pesticideKind
+    if (activityEditDraft.activityTypeId === 'fertilizer-application')
+      meta.fertilizerType = activityEditDraft.fertilizerType
+    const id = activityEditDraft.id
+    setActivityLog((prev) => {
+      const next = prev.map((a) => {
+        if (a.id !== id) return a
+        return {
+          ...a,
+          activityTypeId: activityEditDraft.activityTypeId,
+          quantity,
+          unit: activityEditDraft.unit,
+          meta,
+        }
+      })
+      persistActivityLogEntries(next)
+      return next
+    })
+    notifyStateChange({ type: 'activityUpdated', activityId: id })
+    setActivityEditDraft(null)
+  }
+
+  function deleteActivityEntry(activityId) {
+    if (!activityId) return
+    if (!window.confirm(t('activity.confirmDelete'))) return
+    setActivityLog((prev) => {
+      const next = prev.filter((a) => a.id !== activityId)
+      persistActivityLogEntries(next)
+      return next
+    })
+    setActivityEditDraft((d) => (d?.id === activityId ? null : d))
+    notifyStateChange({ type: 'activityDeleted', activityId })
   }
 
   const autoLocationRequestedRef = useRef(false)
@@ -2064,11 +2006,11 @@ export default function SoilSenseApp() {
           )
           try {
             const payload = JSON.stringify(tasks)
-            localStorage.setItem(`soilsense.dailyTasks.${dailyTasksDayKey}`, payload)
-            storageLog.info('storage.write', { key: `soilsense.dailyTasks.${dailyTasksDayKey}`, bytes: payload.length })
+            localStorage.setItem(dailyTasksTasksStorageKey(dailyTasksDayKey, lang), payload)
+            storageLog.info('storage.write', { key: dailyTasksTasksStorageKey(dailyTasksDayKey, lang), bytes: payload.length })
           } catch (err) {
             storageLog.warn('storage.write.failed', {
-              key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+              key: dailyTasksTasksStorageKey(dailyTasksDayKey, lang),
               ...normalizeErrorForLog(err),
             })
           }
@@ -2085,11 +2027,11 @@ export default function SoilSenseApp() {
           )
           try {
             const payload = JSON.stringify(tasks)
-            localStorage.setItem(`soilsense.dailyTasks.${dailyTasksDayKey}`, payload)
-            storageLog.info('storage.write', { key: `soilsense.dailyTasks.${dailyTasksDayKey}`, bytes: payload.length })
+            localStorage.setItem(dailyTasksTasksStorageKey(dailyTasksDayKey, lang), payload)
+            storageLog.info('storage.write', { key: dailyTasksTasksStorageKey(dailyTasksDayKey, lang), bytes: payload.length })
           } catch (err) {
             storageLog.warn('storage.write.failed', {
-              key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+              key: dailyTasksTasksStorageKey(dailyTasksDayKey, lang),
               ...normalizeErrorForLog(err),
             })
           }
@@ -2133,11 +2075,11 @@ export default function SoilSenseApp() {
         )
         try {
           const payload = JSON.stringify(tasks)
-          localStorage.setItem(`soilsense.dailyTasks.${dailyTasksDayKey}`, payload)
-          storageLog.info('storage.write', { key: `soilsense.dailyTasks.${dailyTasksDayKey}`, bytes: payload.length })
+          localStorage.setItem(dailyTasksTasksStorageKey(dailyTasksDayKey, lang), payload)
+          storageLog.info('storage.write', { key: dailyTasksTasksStorageKey(dailyTasksDayKey, lang), bytes: payload.length })
         } catch (e) {
           storageLog.warn('storage.write.failed', {
-            key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+            key: dailyTasksTasksStorageKey(dailyTasksDayKey, lang),
             ...normalizeErrorForLog(e),
           })
         }
@@ -2228,14 +2170,14 @@ export default function SoilSenseApp() {
 
       try {
         const payload = JSON.stringify(tasks)
-        localStorage.setItem(`soilsense.dailyTasks.${dailyTasksDayKey}`, payload)
+        localStorage.setItem(dailyTasksTasksStorageKey(dailyTasksDayKey, lang), payload)
         storageLog.info('storage.write', {
-          key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+          key: dailyTasksTasksStorageKey(dailyTasksDayKey, lang),
           bytes: payload.length,
         })
       } catch (err) {
         storageLog.warn('storage.write.failed', {
-          key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+          key: dailyTasksTasksStorageKey(dailyTasksDayKey, lang),
           ...normalizeErrorForLog(err),
         })
       }
@@ -2254,14 +2196,14 @@ export default function SoilSenseApp() {
 
       try {
         const payload = JSON.stringify(tasks)
-        localStorage.setItem(`soilsense.dailyTasks.${dailyTasksDayKey}`, payload)
+        localStorage.setItem(dailyTasksTasksStorageKey(dailyTasksDayKey, lang), payload)
         storageLog.info('storage.write', {
-          key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+          key: dailyTasksTasksStorageKey(dailyTasksDayKey, lang),
           bytes: payload.length,
         })
       } catch (err2) {
         storageLog.warn('storage.write.failed', {
-          key: `soilsense.dailyTasks.${dailyTasksDayKey}`,
+          key: dailyTasksTasksStorageKey(dailyTasksDayKey, lang),
           ...normalizeErrorForLog(err2),
         })
       }
@@ -2447,48 +2389,12 @@ export default function SoilSenseApp() {
   return (
     <div className="app-shell">
       <main className="app-content">
-        <div className="app-topbar" aria-label="App settings">
-          <div className="lang-switcher">
-            <button
-              type="button"
-              className="lang-icon-btn"
-              onClick={() => {
-                setIsLangMenuOpen((v) => !v)
-              }}
-              aria-label={t('language.label')}
-              aria-expanded={isLangMenuOpen}
-            >
-              <Globe2 size={18} strokeWidth={2.2} className="lang-icon" />
-              <span className="lang-current">{String(lang || 'en').toUpperCase()}</span>
-            </button>
-
-            {isLangMenuOpen ? (
-              <div className="lang-menu lang-menu-open" role="menu" aria-label={t('language.label')}>
-                {languageMenuItems.map((item) => (
-                  <button
-                    key={item.code}
-                    type="button"
-                    className={item.code === lang ? 'lang-menu-item lang-menu-item-active' : 'lang-menu-item'}
-                    onClick={() => {
-                      changeLanguage(item.code)
-                      setIsLangMenuOpen(false)
-                    }}
-                    role="menuitem"
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </div>
-
         <div key={activeTab} className="view-swap">
           {activeTab === 'dashboard' ? (
             <section className="dashboard dashboard-stack">
               <header className="dashboard-header">
-                <h1 className="dashboard-title">{t('dashboard.welcomeBackFarmer')}</h1>
-                <p className="dashboard-subtitle">{locationLine}</p>
+                {hideWelcomeHeader ? null : <h1 className="dashboard-title">{t('dashboard.welcomeBackFarmer')}</h1>}
+                {hideWelcomeHeader ? null : <p className="dashboard-subtitle">{locationLine}</p>}
 
                 <div className="green-badge-row" aria-label="Sustainability level">
                   <div className="green-score-pill">
@@ -2518,6 +2424,7 @@ export default function SoilSenseApp() {
                 <button
                   type="button"
                   className="btn btn-ghost btn-inline"
+                  data-tour="field-profile"
                   style={{ marginTop: 10 }}
                   onClick={() => {
                     uiLog.info('ui.modal.profile', { action: 'open' })
@@ -2570,6 +2477,7 @@ export default function SoilSenseApp() {
                 />
 
               <section
+                data-tour="smart-alerts"
                 className={
                   smartAlert?.isCritical || smartAlert?.riskType === 'frost'
                     ? 'card smart-alert-card smart-alert-critical'
@@ -2669,31 +2577,28 @@ export default function SoilSenseApp() {
 
                   {dailyTasksStatus === 'success' && dailyTasks.length ? (
                     <div className="daily-tasks-list">
-                      {dailyTasks.map((t) => {
-                        const done = completedTaskIds.includes(String(t.id))
+                      {dailyTasks.map((task) => {
+                        const done = completedTaskIds.includes(String(task.id))
                         return (
-                          <label key={t.id} className={done ? 'task-row task-row-done' : 'task-row'}>
+                          <label key={task.id} className={done ? 'task-row task-row-done' : 'task-row'}>
                             <input
                               type="checkbox"
                               checked={done}
-                              disabled={done}
-                              onChange={() => {
-                                if (!done) toggleTaskCompleted(t.id)
-                              }}
+                              onChange={() => toggleTaskCompleted(task.id)}
                             />
                             <div className="task-content">
                               <div className="task-title-row">
-                                <span className="task-title">{t.title}</span>
-                                {typeof t.estimatedMinutes === 'number' ? (
-                                  <span className="task-minutes">{t.estimatedMinutes}m</span>
+                                <span className="task-title">{task.title}</span>
+                                {typeof task.estimatedMinutes === 'number' ? (
+                                  <span className="task-minutes">{task.estimatedMinutes}m</span>
                                 ) : null}
                               </div>
-                              {t.whyThisTaskHelps ? (
-                                <p className="task-why muted">{t.whyThisTaskHelps}</p>
+                              {task.whyThisTaskHelps ? (
+                                <p className="task-why muted">{task.whyThisTaskHelps}</p>
                               ) : null}
-                              {Array.isArray(t.steps) && t.steps.length ? (
+                              {Array.isArray(task.steps) && task.steps.length ? (
                                 <ol className="task-steps">
-                                  {t.steps.slice(0, 4).map((s, idx) => (
+                                  {task.steps.slice(0, 4).map((s, idx) => (
                                     <li key={idx}>{s}</li>
                                   ))}
                                 </ol>
@@ -2707,7 +2612,7 @@ export default function SoilSenseApp() {
                 </div>
               </section>
 
-              <section className="card">
+              <section className="card" data-tour="activity-log">
                 <div className="card-top">
                   <div className="card-title-wrap">
                     <h2 className="card-title">{t('activity.addActivityTitle')}</h2>
@@ -2754,16 +2659,7 @@ export default function SoilSenseApp() {
                                 onChange={(e) => setActivityDraftUnit(e.target.value)}
                                 style={{ width: 150 }}
                               >
-                                {(ACTIVITY_TYPES.find((x) => x.id === activityDraftTypeId)?.id === 'pesticide-application'
-                                  ? ['liters', 'kg', 'g']
-                                  : ACTIVITY_TYPES.find((x) => x.id === activityDraftTypeId)?.id ===
-                                      'added-compost' ||
-                                    ACTIVITY_TYPES.find((x) => x.id === activityDraftTypeId)?.id ===
-                                      'used-organic-fertilizer' ||
-                                    ACTIVITY_TYPES.find((x) => x.id === activityDraftTypeId)?.id === 'fertilizer-application'
-                                    ? ['kg', 'bags']
-                                    : ['liters', 'kg']
-                                ).map((u) => (
+                                {activityUnitOptionsForType(activityDraftTypeId).map((u) => (
                                   <option key={u} value={u}>
                                     {t(`activity.units.${u}`)}
                                   </option>
@@ -2870,19 +2766,158 @@ export default function SoilSenseApp() {
                   <div style={{ marginTop: 14 }}>
                     <p className="section-title">{t('activity.recentActivities')}</p>
                     {recentActivities.length ? (
-                      <ul className="ordered-list">
+                      <ul className="ordered-list activity-log-list">
                         {recentActivities.slice(0, 7).map((item) => (
-                          <li key={item.id}>
-                            {t(`activity.types.${item.activityTypeId}`)}
-                            {typeof item.quantity === 'number' ? (
-                              <>
-                                {' '}
-                                - {item.quantity}
-                                {item.unit ? ` ${item.unit}` : null}
-                              </>
+                          <li key={item.id} className="activity-log-row">
+                            <div
+                              style={{
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                alignItems: 'flex-start',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                              }}
+                            >
+                              <span style={{ flex: '1 1 200px', lineHeight: 1.45 }}>
+                                {t(`activity.types.${item.activityTypeId}`)}
+                                {typeof item.quantity === 'number' ? (
+                                  <>
+                                    {' '}
+                                    — {item.quantity}
+                                    {item.unit ? ` ${item.unit}` : null}
+                                  </>
+                                ) : null}
+                                {' · '}
+                                {new Date(item.timestamp).toLocaleDateString()}
+                              </span>
+                              <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-inline"
+                                  onClick={() => openActivityEdit(item)}
+                                >
+                                  {t('activity.edit')}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-inline"
+                                  onClick={() => deleteActivityEntry(item.id)}
+                                >
+                                  {t('activity.delete')}
+                                </button>
+                              </span>
+                            </div>
+                            {activityEditDraft?.id === item.id ? (
+                              <div
+                                style={{
+                                  marginTop: 10,
+                                  padding: 12,
+                                  borderRadius: 12,
+                                  border: '1px solid rgba(26, 67, 50, 0.14)',
+                                  background: 'rgba(124, 166, 137, 0.06)',
+                                  display: 'grid',
+                                  gap: 10,
+                                }}
+                              >
+                                <label className="field" style={{ margin: 0 }}>
+                                  <span className="field-label">{t('activity.activityTypeLabel')}</span>
+                                  <select
+                                    className="field-input"
+                                    value={activityEditDraft.activityTypeId}
+                                    onChange={(e) => {
+                                      const nextType = e.target.value
+                                      const opts = activityUnitOptionsForType(nextType)
+                                      setActivityEditDraft((d) => {
+                                        if (!d) return d
+                                        const u = opts.includes(d.unit) ? d.unit : opts[0]
+                                        return { ...d, activityTypeId: nextType, unit: u, error: '' }
+                                      })
+                                    }}
+                                  >
+                                    {ACTIVITY_TYPES.map((act) => (
+                                      <option key={act.id} value={act.id}>
+                                        {t(`activity.types.${act.id}`)}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <label className="field" style={{ margin: 0 }}>
+                                  <span className="field-label">{t('activity.quantityLabel')}</span>
+                                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                    <input
+                                      className="field-input"
+                                      value={activityEditDraft.quantity}
+                                      inputMode="decimal"
+                                      onChange={(e) =>
+                                        setActivityEditDraft((d) => (d ? { ...d, quantity: e.target.value, error: '' } : d))
+                                      }
+                                      style={{ flex: 1 }}
+                                    />
+                                    <select
+                                      className="field-input"
+                                      value={activityEditDraft.unit}
+                                      onChange={(e) =>
+                                        setActivityEditDraft((d) => (d ? { ...d, unit: e.target.value } : d))
+                                      }
+                                      style={{ width: 150 }}
+                                    >
+                                      {activityUnitOptionsForType(activityEditDraft.activityTypeId).map((u) => (
+                                        <option key={u} value={u}>
+                                          {t(`activity.units.${u}`)}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </label>
+                                {activityEditDraft.activityTypeId === 'pesticide-application' ? (
+                                  <label className="field" style={{ margin: 0 }}>
+                                    <span className="field-label">{t('activity.pesticideKindLabel')}</span>
+                                    <select
+                                      className="field-input"
+                                      value={activityEditDraft.pesticideKind}
+                                      onChange={(e) =>
+                                        setActivityEditDraft((d) =>
+                                          d ? { ...d, pesticideKind: e.target.value } : d
+                                        )
+                                      }
+                                    >
+                                      <option value="chemical">{t('activity.pesticideKinds.chemical')}</option>
+                                      <option value="biological">{t('activity.pesticideKinds.biological')}</option>
+                                    </select>
+                                  </label>
+                                ) : null}
+                                {activityEditDraft.activityTypeId === 'fertilizer-application' ? (
+                                  <label className="field" style={{ margin: 0 }}>
+                                    <span className="field-label">{t('activity.fertilizerTypeLabel')}</span>
+                                    <select
+                                      className="field-input"
+                                      value={activityEditDraft.fertilizerType}
+                                      onChange={(e) =>
+                                        setActivityEditDraft((d) =>
+                                          d ? { ...d, fertilizerType: e.target.value } : d
+                                        )
+                                      }
+                                    >
+                                      <option value="organic">{t('activity.fertilizerTypes.organic')}</option>
+                                      <option value="chemical">{t('activity.fertilizerTypes.chemical')}</option>
+                                    </select>
+                                  </label>
+                                ) : null}
+                                {activityEditDraft.error ? (
+                                  <pre className="error-pre" style={{ margin: 0 }}>
+                                    {activityEditDraft.error}
+                                  </pre>
+                                ) : null}
+                                <div className="key-actions">
+                                  <button type="button" className="btn btn-primary" onClick={saveActivityEdit}>
+                                    {t('activity.saveChanges')}
+                                  </button>
+                                  <button type="button" className="btn btn-ghost" onClick={cancelActivityEdit}>
+                                    {t('activity.addActivityCancel')}
+                                  </button>
+                                </div>
+                              </div>
                             ) : null}
-                            {' '}
-                            {new Date(item.timestamp).toLocaleDateString()}
                           </li>
                         ))}
                       </ul>
@@ -2893,7 +2928,7 @@ export default function SoilSenseApp() {
                 </div>
               </section>
 
-              <section className="card">
+              <section className="card" data-tour="soil-advisor">
                 <div className="card-top">
                   <div className="card-title-wrap">
                     <h2 className="card-title">{t('common.soilAdvice')}</h2>
@@ -3011,7 +3046,7 @@ export default function SoilSenseApp() {
           ) : null}
 
           {activeTab === 'planner' ? (
-            <section className="dashboard dashboard-stack">
+            <section className="dashboard dashboard-stack" data-tour="field-planner">
               <header className="dashboard-header">
                 <h1 className="dashboard-title">{t('fieldPlanner.title')}</h1>
                 <p className="dashboard-subtitle">{t('fieldPlanner.subtitle')}</p>
@@ -3026,7 +3061,7 @@ export default function SoilSenseApp() {
                 <h1 className="dashboard-title">{t('tabs.compost')}</h1>
                 <p className="dashboard-subtitle">{t('dashboard.compostHeaderSubtitle')}</p>
               </header>
-              <section className="card">
+              <section className="card" data-tour="compost-panel">
                 <div className="card-body">
                   <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 0, marginBottom: 12 }}>
                     <button
@@ -3057,7 +3092,7 @@ export default function SoilSenseApp() {
                 <p className="dashboard-subtitle">{t('guide.guideSubtitle')}</p>
               </header>
 
-              <section className="card guide-card-articles guide-insights-scroll">
+              <section className="card guide-card-articles guide-insights-scroll" data-tour="educational-guides">
                 <div className="card-top">
                   <div className="card-title-wrap">
                     <h2 className="card-title">{t('guide.articlesCardTitle')}</h2>
@@ -3398,23 +3433,25 @@ export default function SoilSenseApp() {
       </main>
 
       <nav className="bottom-nav" aria-label="Bottom navigation">
-        {TABS.map((t) => {
-          const isActive = t.id === activeTab
-          const Icon = t.icon
+        {TABS.map((tab) => {
+          const isActive = tab.id === activeTab
+          const Icon = tab.icon
           return (
             <button
-              key={t.id}
+              key={tab.id}
+              type="button"
+              data-tab-id={tab.id}
               className={isActive ? 'nav-item nav-item-active' : 'nav-item'}
               onClick={() =>
                 setActiveTab((prev) => {
-                  if (prev !== t.id) uiLog.info('ui.tab.change', { from: prev, to: t.id })
-                  return t.id
+                  if (prev !== tab.id) uiLog.info('ui.tab.change', { from: prev, to: tab.id })
+                  return tab.id
                 })
               }
               aria-current={isActive ? 'page' : undefined}
             >
               <Icon size={22} strokeWidth={1.6} className="nav-icon" />
-              <span className="nav-label">{t.label}</span>
+              <span className="nav-label">{tab.label}</span>
             </button>
           )
         })}

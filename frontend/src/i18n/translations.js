@@ -232,6 +232,31 @@ const translations = {
           ],
         },
       },
+      cropTasks: {
+        selectedCropsFallback: 'selected crops',
+        dosage: {
+          title: 'Apply crop-specific compost for {crops}',
+          whyThisTaskHelps:
+            'Keeps nutrient delivery aligned with field size and crop demand ({compostKg} kg target).',
+          step1: 'Split compost in two passes to avoid patchy application.',
+          step2: 'Target {compostKg} kg total and avoid piling against stems.',
+          step3: 'Irrigate lightly after top-dressing to activate soil biology.',
+        },
+        layout: {
+          title: 'Validate row spacing and companion layout',
+          whyThisTaskHelps: 'Improves airflow and compatibility while reducing disease pressure.',
+          spacingFallback: 'Keep a consistent row spacing plan.',
+          stepSpacing: 'Follow per-crop spacing to avoid canopy overlap.',
+          stepSeparate: 'Separate incompatible crop pairs into different zones.',
+        },
+        safety: {
+          title: 'Check pesticide threshold before next spray',
+          whyThisTaskHelps: 'Prevents over-application beyond crop tolerance.',
+          stepUsage: 'Current weekly chemical usage: {pesticideL} L (context for selected crops).',
+          stepThreshold: 'Hard stop threshold: {toleranceL} L.',
+          stepScout: 'If close to threshold, shift to scouting and biological control.',
+        },
+      },
     },
     compostWizard: {
       wasteInventory: 'Waste Inventory',
@@ -328,34 +353,43 @@ const translations = {
 
       whyHeading: 'Why sustainable farming starts with soil health',
       whyBody:
-        'Soil is a living system. When you care for organic matter, moisture, and airflow, microbes and earthworms help you build fertility naturally. Sustainable pest management works best when the soil is strong enough to resist stress.',
-      pullQuoteWhy: 'Feed the soil food web, and many pest problems become easier to prevent.',
+        'Soil is a living system—not just “dirt,” but a community of bacteria, fungi, roots, and larger organisms working together. When you protect organic matter, manage moisture, and keep oxygen moving through the profile, you support the soil food web that cycles nutrients and stabilizes structure.\n\nSustainable pest management is easier when plants are not chronically stressed. Strong roots, adequate nutrition, and resilient soil biology help crops tolerate pressure from insects and diseases without constant chemical rescue. Compost and thoughtful residue management feed that biology over time, so fertility becomes more self-sustaining.',
+      pullQuoteWhy:
+        'Feed the soil food web steadily, and many pest problems become easier to prevent before they escalate.',
       whyBullets: [
-        'Healthy soil improves plant vigor, which reduces stress-related pest outbreaks.',
-        'Organic matter stores nutrients so fertility becomes more stable over time.',
-        'Consistent composting and cover keeps the soil ecosystem working year-round.',
+        'Healthy soil improves plant vigor and root exploration, which lowers stress-related pest and disease risk.',
+        'Organic matter buffers nutrients and water, making supply steadier across dry or wet spells.',
+        'Diverse residues and compost inputs support a wider range of beneficial organisms.',
+        'Stable soil structure improves infiltration and reduces erosion that exposes plants to stress.',
+        'Covering soil with living or dead mulch moderates temperature and can reduce weed flushes that compete with crops.',
+        'A long-term soil-health plan pairs regular observation with small adjustments instead of one-off fixes.',
       ],
 
       pesticideHeading: 'Pesticide awareness: what chemical use can change',
       pesticideBody:
-        'Some pesticides do more than target pests. They can also affect beneficial microbes that help break down organic matter. That can reduce the speed of composting, slow nutrient cycling, and make long-term fertility harder.',
-      pullQuotePesticide: 'The goal is not “zero inputs” — it is keeping soil life resilient.',
+        'Some pesticides are designed to target specific pests, but many formulations can also affect non-target organisms in and on the soil. Beneficial microbes that decompose residues, fix nitrogen, or help plants access nutrients may be sensitive to repeated or broad-spectrum use. When those communities are disrupted, organic matter may break down more slowly, nutrient cycling can stall, and crops may show hidden hunger even when tests look “okay.”\n\nIntegrated Pest Management (IPM) encourages scouting, thresholds, cultural controls, and rotation before defaulting to chemistry. When you do apply a product, timing, rate, placement, and choice of active ingredient all affect how much interacts with below-ground life. Thinking in seasons—not single sprays—helps keep soil biology resilient.',
+      pullQuotePesticide: 'The goal is not “zero inputs”—it is keeping soil life resilient while you protect the crop.',
       pesticideBullets: [
-        'Chemical inputs may reduce microbial diversity and soil enzyme activity.',
+        'Chemical inputs may reduce microbial diversity, enzyme activity, and beneficial predator habitat.',
         'Lower microbial activity can slow organic matter breakdown and compost maturity.',
-        'Use prevention: diverse cover, soil cover, and targeted monitoring before treatment.',
+        'Repeated use of the same mode of action can strengthen pest populations through selection pressure.',
+        'Off-target movement (drift, runoff) can affect edges, water bodies, and non-crop areas—plan buffer strips and weather windows.',
+        'Cultural tactics—rotation, resistant varieties, sanitation, and soil cover—often reduce how often you need a spray.',
+        'Keep records: what you applied, where, and what happened next season builds better decisions over time.',
       ],
 
       infographicCycleTitle: 'Soil life cycle (placeholder)',
-      infographicCycleCaption: 'A simple diagram placeholder for the soil cycle: organic matter → microbes → nutrients → plant uptake.',
+      infographicCycleCaption:
+        'Organic matter feeds soil life; microbes and fungi release nutrients in plant-available forms; roots and cover crops return carbon and structure—closing the loop when you protect biology.',
       infographicCompostLayersTitle: 'Compost layering (placeholder)',
-      infographicCompostLayersCaption: 'A simple diagram placeholder for Browns/Greens layering, moisture, and airflow.',
+      infographicCompostLayersCaption:
+        'Browns (carbon-rich) and greens (nitrogen-rich) in layers, with moisture like a wrung-out sponge and enough pore space for air—turn or stir when the pile needs oxygen.',
       infographicBenefitsAlt: 'Sustainable farming benefits infographic',
       infographicNutrientCycleAlt: 'Soil nutrient and microbial cycle infographic',
 
       locationHeading: 'Location-based composting & pest control alternatives',
       locationBody:
-        'Your local climate and conditions influence how fast compost breaks down and how pests behave. Use the tips below as a starting point and adjust based on what you observe in your field.',
+        'Your climate shapes how quickly compost matures, how often you turn or water piles, and when pest populations peak during the season. What works in a humid coastal valley differs from a highland farm or an arid plain. Treat the zone notes below as a framework, then refine them with your own field diary: scout regularly, note weather windows, and adjust compost recipes and pest tactics to what you actually see.',
       locationZoneTitle: 'Your local climate focus',
       locationZone: {
         dry: 'Dry region focus',
@@ -365,13 +399,13 @@ const translations = {
       },
       locationZoneTips: {
         dry:
-          'Prioritize moisture retention: mulch well, water deeply (less often), and keep compost covered so it stays damp. For pests, start with frequent scouting and reduce plant stress before you consider any treatment.',
+          'Prioritize moisture retention: thick mulch on beds, deep infrequent irrigation to train roots downward, and windbreaks where wind desiccates crops and compost. Keep compost piles covered or partly buried so they do not dry into dust; add water in small doses when you turn. For pests, stressed plants attract problems—scout leaf undersides and soil surface early, and fix water stress before reaching for chemistry.',
         humid:
-          'Prioritize ground cover and airflow: keep beds mulched, avoid overly wet compost conditions, and ensure spacing for plants. For pests, focus on monitoring early signs and using physical barriers (row cover) when needed.',
+          'Prioritize airflow and drainage: wide paths, raised beds where needed, and pruning that opens the canopy. Turn compost when it smells sour or sits wet; balance greens with enough browns to avoid anaerobic pockets. For pests, humidity favors fungi and soft-bodied insects—monitor at dawn, use row cover at vulnerable stages, and remove infected debris promptly.',
         cold:
-          'Prioritize slow, steady composting: keep piles insulated, maintain damp (not wet) conditions, and protect seedlings. For pests, use prevention—healthy soil and gentle barriers work better than repeated interventions.',
+          'Prioritize insulation and timing: larger compost piles hold heat; insulate with straw or tarps; chop materials smaller so they heat in shorter seasons. Protect seedlings with tunnels or cloches, and avoid working wet soil. For pests, short growing windows mean prevention matters—choose varieties suited to your frost dates, harden off transplants, and use row cover to exclude early-season pests.',
         temperate:
-          'Aim for consistency: maintain compost quality and steady soil cover. For pests, use integrated prevention—cover crops, diverse habitat, and early monitoring.',
+          'Aim for steady routines: season-long soil cover, consistent compost additions, and crop rotation to break pest cycles. Weather can swing quickly—keep compost moisture even and turn when cooling stalls. For pests, build habitat for beneficials (flowering strips, undisturbed margins) and scout weekly during rapid growth phases so small issues stay small.',
       },
 
       goodSoilAlt: 'Good soil placeholder',
@@ -379,9 +413,11 @@ const translations = {
       badSoilAlt: 'Damaged soil placeholder',
       badSoilCaption: 'Bad soil often means low biology activity: compaction, poor structure, and fragile plants.',
       compostingLayersAlt: 'Composting 101 layering diagram',
-      compostingLayersCaption: 'Layering guide: final brown cap, greens, browns, and base structure for airflow.',
+      compostingLayersCaption:
+        'Classic layering: coarse browns at the base for airflow, alternating greens and browns, and a brown “cap” on top to reduce odors and retain moisture—adjust thickness to your materials and climate.',
       compostPileLayeringAlt: 'Compost pile layering sequence',
-      compostPileLayeringCaption: 'Repeat layering cycle: browns + greens with water and air to keep decomposition active.',
+      compostPileLayeringCaption:
+        'Each repeat of the cycle adds food and structure: keep the pile as damp as a wrung-out sponge, and turn when temperature drops or the center smells anaerobic.',
     },
     plantScanner: {
       title: 'Plant Scanner',
@@ -428,6 +464,7 @@ const translations = {
       tocZone: 'Your climate',
       categoriesUnavailable: 'Knowledge Hub categories unavailable.',
       couldNotLoadKnowledgeHub: "Couldn't load the Knowledge Hub.",
+      closeReading: 'Close reading',
     },
     keyPanel: {
       title: 'Gemini API Key (Testing)',
@@ -562,6 +599,11 @@ const translations = {
       },
       addActivitySave: 'Save',
       addActivityCancel: 'Cancel',
+      edit: 'Edit',
+      delete: 'Delete',
+      saveChanges: 'Save changes',
+      confirmDelete: 'Remove this activity entry?',
+      activityTypeLabel: 'Activity type',
     },
     auth: {
       signUp: 'Sign Up',
@@ -576,6 +618,7 @@ const translations = {
       haveAccount: 'Already have an account? Login',
       noAccount: "Don't have an account? Sign up",
       logout: 'Logout',
+      logoutConfirm: 'Logout?',
       forgotPassword: 'Forgot password?',
       backToLogin: 'Back to login',
       resetPassword: 'Reset Password',
@@ -585,6 +628,7 @@ const translations = {
     },
     fields: {
       activeField: 'Active Field',
+      myfFieldsTitle: 'My Fields',
       addField: 'Add Field',
       editField: 'Edit Field',
       deleteField: 'Delete Field',
@@ -782,6 +826,31 @@ const translations = {
           steps: ['Yaprakları dikkatle gözleyin', 'Etkilenmiş materyali uzaklaştırın', 'Ne bulduğunuzu kaydedin'],
         },
       },
+      cropTasks: {
+        selectedCropsFallback: 'seçilen ürünler',
+        dosage: {
+          title: '{crops} için ürüne özel kompost uygulayın',
+          whyThisTaskHelps:
+            'Alan büyüklüğü ve ürün talebiyle uyumlu besin iletimini korur (hedef: {compostKg} kg).',
+          step1: 'Düzensiz yayılımı önlemek için kompostu iki geçişte uygulayın.',
+          step2: 'Toplam {compostKg} kg hedefleyin; gövdeye yığılmasın.',
+          step3: 'Üst gübrelemeden sonra hafif sulayarak toprak biyolojisini destekleyin.',
+        },
+        layout: {
+          title: 'Sıra aralığı ve uyumlu eşleşmeleri doğrulayın',
+          whyThisTaskHelps: 'Hava akışını ve uyumunu iyileştirir, hastalık baskısını azaltır.',
+          spacingFallback: 'Tutarlı bir sıra aralığı planı kullanın.',
+          stepSpacing: 'Üst örtü çakışmasını önlemek için ürüne özel aralıklara uyun.',
+          stepSeparate: 'Uyumsuz ürün çiftlerini farklı bölgelere ayırın.',
+        },
+        safety: {
+          title: 'Sonraki ilaçlamadan önce pestisit eşiğini kontrol edin',
+          whyThisTaskHelps: 'Ürün toleransının üzeri uygulamayı önler.',
+          stepUsage: 'Haftalık kimyasal kullanım: {pesticideL} L (seçilen ürünlere göre).',
+          stepThreshold: 'Kesin üst sınır: {toleranceL} L.',
+          stepScout: 'Eşiğe yakınsanız, keşfe ve biyolojik müdahaleye kayın.',
+        },
+      },
     },
     compostWizard: {
       wasteInventory: 'Atık Envanteri',
@@ -907,6 +976,7 @@ const translations = {
       tocZone: 'İkliminiz',
       categoriesUnavailable: 'Bilgi Merkezi kategorileri kullanılamıyor.',
       couldNotLoadKnowledgeHub: "Bilgi Merkezi yüklenemedi.",
+      closeReading: 'Okumayı kapat',
     },
     keyPanel: {
       title: 'Gemini API Anahtarı (Test)',
@@ -1013,27 +1083,39 @@ const translations = {
         compostBasicsDesc: 'Once kaliteli kompost olusturun; bu faydali mikroplari destekler.',
       },
       whyHeading: 'Surdurulebilir tarim neden toprak sagligiyla baslar',
-      whyBody: 'Toprak canli bir sistemdir. Organik madde, nem ve hava dengesini korumak verimliligi dogal olarak artirir.',
-      pullQuoteWhy: 'Toprak agini beslerseniz, zararli baskisini daha kolay yonetirsiniz.',
+      whyBody:
+        'Toprak sadece “kir” degil; bakteri, mantar, kok ve diger canlilardan olusan bir sistemdir. Organik maddeyi koruyup nemi ve havayi yoneterek besin dongusunu ve yapiyi destekleyen toprak besin agini guclendirirsiniz.\n\nBitkiler kronik stres altinda degilse surdurulebilir zararli yonetimi kolaylasir. Guclu kok, dengeli beslenme ve dayanikli toprak biyolojisi, kimyasal mudahaleye surekli ihtiyaci azaltir. Kompost ve artik yonetimi zaman icinde bu biyolojiyi besler.',
+      pullQuoteWhy:
+        'Toprak besin agini duzenli beslerseniz, bircok zararli sorunu buyumeden onlemek mumkun olur.',
       whyBullets: [
-        'Saglikli toprak bitki direncini artirir.',
-        'Organik madde besin dengesini korur.',
-        'Surekli ortu ve kompost toprak yasamini canli tutar.',
+        'Saglikli toprak bitki gelisimini ve kok kesfini artirir; stres kaynakli zararli riskini dusurur.',
+        'Organik madde su ve besin tamponu saglar; kurak veya yagisli donemlerde daha dengeli destek sunar.',
+        'Cesitli artik ve kompost girdileri faydali organizma cesitliligini destekler.',
+        'Stabil yapi infiltrasyonu iyilestirir; erozyon ve bitki stresini azaltir.',
+        'Canli veya olu ortu sicakligi yumusatir ve ayni zamanda yogun yabanci ot baskisini azaltabilir.',
+        'Uzun vadeli plan; tek seferlik mudahale yerine gozlem ve kucuk ayarlamalarla ilerler.',
       ],
       pesticideHeading: 'Pestisit farkindaligi: kimyasal kullanim neleri degistirir',
-      pesticideBody: 'Bazi pestisitler faydali mikroplari da etkileyebilir. Bu durum uzun vadeli toprak verimini zayiflatabilir.',
-      pullQuotePesticide: 'Hedef sifir girdi degil, dayanikli bir toprak biyolojisidir.',
+      pesticideBody:
+        'Bazi urunler hedef zararlilari vurmak icin tasarlanir; ancak bircok formulasyon topraktaki hedef disi canlilari da etkileyebilir. Artik parcalayan, azot dongusune katilan veya bitki besin erisimine yardim eden faydali mikroplar tekrarlayan veya genis spektrumlu kullanimlara hassas olabilir. Bu topluluklar zayifladiginda organik madde yavas cozulur, besin dongusu aksayabilir.\n\nEntegre Zararli Yonetimi (EZY) once izleme, esik, kulturel onlemler ve rotasyonu onerir. Urun uygularken zamanlama, doz, yer secimi ve etken madde secimi toprak alti yasami nasil etkiler. Mevsimler boyunca dusunmek tek bir ilac yerine biyolojik dayanikliligi korur.',
+      pullQuotePesticide: 'Hedef sifir girdi degil; urunu korurken toprak yasamini dayanikli tutmaktir.',
       pesticideBullets: [
-        'Kimyasallar mikrobiyal cesitliligi azaltabilir.',
-        'Dusuk biyolojik aktivite organik madde donusumunu yavaslatir.',
-        'Once izleme, ortu ve entegre yontemleri tercih edin.',
+        'Kimyasal girdiler mikrobiyal cesitlilik ve enzim aktivitesini dusurebilir.',
+        'Dusuk mikrobiyal aktivite organik madde olgunlugunu ve kompost hizini yavaslatabilir.',
+        'Ayni etki mekanizmasinin tekrari secilim baskisi ile zararlilari guclendirebilir.',
+        'Suruklenme ve yuzey akisi kenar, su ve hedef disi alanlari etkileyebilir; tampon ve hava penceresi planlayin.',
+        'Rotasyon, direncli cesit, hijyen ve ortu gibi kulturel onlemler ilac ihtiyacini azaltabilir.',
+        'Ne, nerede, ne zaman uyguladiginizi kaydedin; gelecek sezon kararlarinizi iyilestirir.',
       ],
       infographicBenefitsAlt: 'Surdurulebilir tarim faydalari infografik',
-      infographicCycleCaption: 'Organik madde -> mikroplar -> besin -> bitki alim dongusu.',
+      infographicCycleCaption:
+        'Organik madde toprak yasamini besler; mikroplar ve mantarlar bitkiye alinabilir besin saglar; kok ve ortu karbonu geri kazandirir—biyolojiyi korudugunuzda dongu kapanir.',
       infographicNutrientCycleAlt: 'Toprak besin ve mikrobiyal dongu infografik',
-      infographicCompostLayersCaption: 'Kahverengi/yesil katmanlama, nem ve hava akis rehberi.',
+      infographicCompostLayersCaption:
+        'Kahverengi (karbon) ve yesil (azot) katmanlar; nem sikilmis bez gibi; yeterli gozenek ile hava—gerektiginde karistirarak oksijen saglayin.',
       locationHeading: 'Konuma gore kompost ve zararli yonetimi',
-      locationBody: 'Yerel iklim kompost hizini ve zararli baskisini etkiler. Bu onerileri gozlemlerinizle uyarlayin.',
+      locationBody:
+        'Ikliminiz kompostun olgunlasma hizini, yigini ne siklikla cevirmeniz gerektigini ve zararlilarin sezon icinde ne zaman yogunlastigini sekillendirir. Nemli bir vadide isleyen plan kurak platodakinden farklidir. Asagidaki bolge notlarini cerceve olarak alin; tarla gunlugu, hava pencereleri ve gercek gozlemlerle kompost ve zararli taktiklerinizi ince ayar yapin.',
       locationZoneTitle: 'Yerel iklim odagi',
       locationZone: {
         dry: 'Kuru bolge odagi',
@@ -1042,15 +1124,21 @@ const translations = {
         temperate: 'Iliman bolge odagi',
       },
       locationZoneTips: {
-        dry: 'Nemi koruyun: malc kullanin, derin ama seyrek sulayin, kompostu ortulu tutun.',
-        humid: 'Hava akisi ve ortu oncelikli olsun; asiri islak kosullardan kacinin.',
-        cold: 'Yavas ve dengeli kompostlama yapin; fideleri koruyun.',
-        temperate: 'Tutarlilik saglayin: duzenli ortu, kompost ve erken izleme uygulayin.',
+        dry:
+          'Su tutmayi onceliklendirin: kalin malc, derin ve seyrek sulama, ruzgarin kuruttugu alanlarda ruzgar perdesi. Kompost yiginlarini ortulu veya kismen gomulu tutun; kurumaya karsi kucuk dozlarla nem verin. Stresli bitkiler sorun ceker—yaprak altlarini erken tarayin; kimyasala gecmeden once su stresini giderin.',
+        humid:
+          'Hava ve drenaj: gerekiyorsa genis patlar, yukseltilmis rabatlar, budama ile canopy acin. Kompost kokuyorsa veya islak oturuyorsa cevirin; yesillere kahverengi dengeleyin. Yuksek nem mantarlari ve yumusak govde boceklerini kolaylastirir—seherde izleyin, hassas donemlerde tull kullanin, enfekte artiklari hizla kaldirin.',
+        cold:
+          'Yalitim ve zamanlama: buyuk yiginlar isiyi tutar; saman veya ortu ile yalitin; kisa sezonda parcalari kucultun. Fideleri tunel veya klok ile koruyun; islak toprakta calismayin. Kisaltilmis vejetasyon onlem demektir—don tarihlerine uygun cesit, sertlestirme ve erken zararlilara karsi tull kullanin.',
+        temperate:
+          'Sezon boyu ortu, duzenli kompost ve rotasyonla zararli dongulerini kirin. Hava hizli degisir—kompost nemini denge tutun, soguma durunca cevirin. Faydali habitat (cicek seridi, kenar) kurun ve hizli buyume donemlerinde haftalik izleyin.',
       },
       compostingLayersAlt: 'Kompost katmanlama diyagrami',
-      compostingLayersCaption: 'Ust kahverengi kapak, yesil-kahverengi dongu ve hava akis duzeni.',
+      compostingLayersCaption:
+        'Klasik katmanlama: altta hava icin kabaca kahverengiler, yesil-kahverengi alternans, kokuyu ve nemi tutmak icin ustte kahverengi kapak—malzeme ve ikliminize gore kalinligi ayarlayin.',
       compostPileLayeringAlt: 'Kompost yigini katman sirasi',
-      compostPileLayeringCaption: 'Katmanlama dongusunu su ve hava ile duzenli tekrar edin.',
+      compostPileLayeringCaption:
+        'Her dongu yapi ve gida ekler: nem sikilmis bez gibi; merkez anaerobik kokuyorsa veya sicaklik duserse cevirin.',
     },
     activity: {
       addActivityTitle: 'Aktivite Kaydı',
@@ -1078,6 +1166,7 @@ const translations = {
       haveAccount: 'Zaten hesabın var mı? Giriş yap',
       noAccount: 'Hesabın yok mu? Kayıt ol',
       logout: 'Çıkış Yap',
+      logoutConfirm: 'Çıkış yap?',
       forgotPassword: 'Şifreni mi unuttun?',
       backToLogin: 'Girişe dön',
       resetPassword: 'Şifreyi Sıfırla',
@@ -1087,6 +1176,7 @@ const translations = {
     },
     fields: {
       activeField: 'Aktif Tarla',
+      myfFieldsTitle: 'Benim Tarlalarım',
       addField: 'Tarla Ekle',
       editField: 'Tarlayi Duzenle',
       deleteField: 'Tarlayi Sil',
@@ -1341,6 +1431,31 @@ const translations = {
           ],
         },
       },
+      cropTasks: {
+        selectedCropsFallback: 'ausgewählte Kulturen',
+        dosage: {
+          title: 'Kulturspezifischen Kompost für {crops} anwenden',
+          whyThisTaskHelps:
+            'Hält die Nährstoffversorgung an Feldgröße und Kulturbedarf ausgerichtet (Ziel: {compostKg} kg).',
+          step1: 'Kompost in zwei Gängen ausbringen, um Flecken zu vermeiden.',
+          step2: 'Insgesamt {compostKg} kg anstreben und Stämme nicht anhäufen.',
+          step3: 'Nach dem Auftragen leicht wässern, um die Bodenbiologie zu aktivieren.',
+        },
+        layout: {
+          title: 'Reihenabstand und Mischkultur prüfen',
+          whyThisTaskHelps: 'Verbessert Luftaustausch und Verträglichkeit und senkt Krankheitsdruck.',
+          spacingFallback: 'Behalte einen gleichmäßigen Reihenabstand bei.',
+          stepSpacing: 'Halte kulturspezifische Abstände ein, um Kronenüberlappung zu vermeiden.',
+          stepSeparate: 'Unverträgliche Kulturen in getrennte Bereiche legen.',
+        },
+        safety: {
+          title: 'Pestizidgrenze vor der nächsten Ausbringung prüfen',
+          whyThisTaskHelps: 'Verhindert Überdosierung über die Kulturtoleranz hinaus.',
+          stepUsage: 'Aktuelle wöchentliche chemische Menge: {pesticideL} L (Kontext für ausgewählte Kulturen).',
+          stepThreshold: 'Harte Obergrenze: {toleranceL} L.',
+          stepScout: 'Nahe an der Grenze: auf Kontrolle und biologische Maßnahmen umstellen.',
+        },
+      },
     },
     compostWizard: {
       wasteInventory: 'Abfall-Übersicht',
@@ -1466,6 +1581,7 @@ const translations = {
       tocZone: 'Dein Klima',
       categoriesUnavailable: 'Knowledge-Hub-Kategorien nicht verfügbar.',
       couldNotLoadKnowledgeHub: 'Knowledge Hub konnte nicht geladen werden.',
+      closeReading: 'Text schließen',
     },
     keyPanel: {
       title: 'Gemini API-Schlüssel (Test)',
@@ -1572,27 +1688,40 @@ const translations = {
         compostBasicsDesc: 'Zuerst stabilen Kompost aufbauen; er unterstuetzt nuetzliche Mikroben.',
       },
       whyHeading: 'Warum nachhaltige Landwirtschaft mit Bodengesundheit beginnt',
-      whyBody: 'Boden ist ein lebendiges System. Organische Substanz, Feuchte und Luftfoehrung sichern langfristige Fruchtbarkeit.',
-      pullQuoteWhy: 'Ernaehrst du das Bodenleben, wird Schaedlingspraevention einfacher.',
+      whyBody:
+        'Boden ist mehr als Untergrund: Bakterien, Pilze, Wurzeln und andere Organismen bilden ein Netzwerk. Wer Humus schuetzt, Feuchte steuert und Sauerstoff im Profil zulaesst, unterstuetzt den Naehrstoffkreislauf und stabile Struktur.\n\nNachhaltiger Pflanzenschutz gelingt leichter, wenn Pflanzen nicht dauerhaft gestresst sind. Kraeftige Wurzeln, ausgewogene Ernaehrung und widerstandsfaehige Bodenbiologie verringern den Bedarf an staendigen chemischen Eingriffen. Kompost und sorgfaeltige Stoppelbewirtschaftung naehren diese Biologie ueber Jahre.',
+      pullQuoteWhy:
+        'Wer das Bodenleben kontinuierlich unterstuetzt, kann viele Schaedlingsprobleme fruehzeitig entschaerfen.',
       whyBullets: [
-        'Gesunder Boden staerkt die Pflanzenvitalitaet.',
-        'Organische Substanz stabilisiert die Naehrstoffversorgung.',
-        'Konsequente Bodenbedeckung haelt das System aktiv.',
+        'Gesunder Boden verbessert Pflanzenvitalitaet und Wurzelraum – weniger Stress, weniger Schaedlingsrisiko.',
+        'Organische Substanz puffert Wasser und Naehrstoffe in trockenen oder nassen Phasen.',
+        'Vielfaeltige Rueckstaende und Kompost foerdern ein breiteres Spektrum nuetzlicher Organismen.',
+        'Stabile Struktur verbessert Infiltration und mindert Erosion.',
+        'Bodenbedeckung (lebend oder tot) moderiert Temperatur und kann unkrautstarken Konkurrenzdruck senken.',
+        'Langfristige Bodenstrategie: regelmaessige Beobachtung und kleine Anpassungen statt Einmal-Loesungen.',
       ],
       pesticideHeading: 'Pestizid-Bewusstsein: Was sich veraendern kann',
-      pesticideBody: 'Einige Mittel koennen auch nuetzliche Mikroben beeintraechtigen und so die Bodenleistung bremsen.',
-      pullQuotePesticide: 'Ziel ist resilientes Bodenleben, nicht dogmatischer Verzicht.',
+      pesticideBody:
+        'Manche Mittel sind auf Schaedlinge zugeschnitten, dennoch koennen viele Formulierungen auch nicht beabsichtigte Bodenorganismen treffen. Nuetzliche Mikroben beim Abbau, bei der N-Fixierung oder Naehrstoffmobilisierung reagieren empfindlich auf wiederholte oder breit wirksame Anwendungen. Wenn diese Gemeinschaften geschwaecht sind, kann Humus langsamer reifen und Naehrstoffe stocken.\n\nIntegrierter Pflanzenschutz (IPM) setzt auf Beobachtung, Schwellenwerte, Kulturmassnahmen und Fruchtfolge, bevor Chemie zur Routine wird. Zeitpunkt, Menge, Applikation und Wirkstoffwahl beeinflussen die Bodenbiologie. Denken Sie in Jahresverlaeufen – nicht nur in Einzelspritzungen.',
+      pullQuotePesticide:
+        'Ziel ist nicht “null Chemie”, sondern widerstandsfaehiges Bodenleben bei gleichzeitigem Kulturschutz.',
       pesticideBullets: [
-        'Chemische Inputs koennen die mikrobielle Vielfalt senken.',
-        'Geringere Aktivitaet verlangsamt Naehrstoffkreislauf und Humusaufbau.',
-        'Praevention durch Beobachtung, Bodenbedeckung und integrierte Methoden priorisieren.',
+        'Chemische Inputs koennen mikrobielle Vielfalt und Enzymaktivitaet mindern.',
+        'Geringere biologische Aktivitaet bremst Humusaufbau und Kompostreife.',
+        'Wiederholter gleicher Wirkmechanismus kann Resistenzen bei Schaedlingen foerdern.',
+        'Abdrift und Oberflaechenabfluss belasten Raine und Randbereiche – Pufferstreifen und Wetterfenster planen.',
+        'Fruchtfolge, resistente Sorten, Hygiene und Bodenbedeckung reduzieren oft den Spritzbedarf.',
+        'Fuehren Sie Aufzeichnungen: Mittel, Fläche, Termin – bessere Entscheidungen im Folgejahr.',
       ],
       infographicBenefitsAlt: 'Infografik zu Vorteilen nachhaltiger Landwirtschaft',
-      infographicCycleCaption: 'Organische Substanz -> Mikroben -> Naehrstoffe -> Pflanzenaufnahme.',
+      infographicCycleCaption:
+        'Organische Substanz naehrt Bodenleben; Mikroben und Pilze stellen Pflanzen verfuegbare Naehrstoffe bereit; Wurzeln und Bedeckung geben Kohlenstoff und Struktur zurueck.',
       infographicNutrientCycleAlt: 'Infografik zu Naehrstoff- und Mikrobenkreislauf',
-      infographicCompostLayersCaption: 'Leitfaden fuer Gruen/Braun-Schichtung, Feuchte und Luft.',
+      infographicCompostLayersCaption:
+        'Braun (C-reich) und Gruen (N-reich) in Schichten, Feuchte wie ein ausgewrungener Schwamm, genug Porenraum fuer Luft – bei Bedarf wenden oder mischen.',
       locationHeading: 'Standortbezogene Kompost- und Schaedlingsstrategien',
-      locationBody: 'Lokales Klima beeinflusst Komposttempo und Schaedlingsdruck. Hinweise an Feldbeobachtungen anpassen.',
+      locationBody:
+        'Ihr Klima bestimmt, wie schnell Kompost reift, wie oft Sie wenden und wann Schaedlinge saisonal spitzen. Was in einem feuchten Tal funktioniert, passt nicht unveraendert ins Hochland oder in trockene Steppen. Nutzen Sie die Zonenhinweise als Rahmen und verfeinern Sie mit Feldtagebuch, Wetterfenstern und eigenen Beobachtungen.',
       locationZoneTitle: 'Dein lokaler Klimafokus',
       locationZone: {
         dry: 'Fokus trockene Region',
@@ -1601,15 +1730,21 @@ const translations = {
         temperate: 'Fokus gemaessigt',
       },
       locationZoneTips: {
-        dry: 'Feuchtigkeit halten: mulchen, tief aber seltener giessen, Kompost abdecken.',
-        humid: 'Luftzirkulation und Bodenbedeckung verbessern; Staunaesse vermeiden.',
-        cold: 'Langsame stabile Kompostierung und Schutz empfindlicher Jungpflanzen.',
-        temperate: 'Konsequent arbeiten: Boden bedecken, Kompost pflegen, frueh beobachten.',
+        dry:
+          'Feuchtigkeit halten: dicke Mulchschicht, seltenes tiefes Giessen, Windschutz wo Wind austrocknet. Komposthaufen abdecken oder teilweise eingraben; beim Wenden feucht halten ohne Staunaesse. Gestresste Pflanzen lockern Schaedlinge – Blattunterseiten frueh pruefen, Wasserstress vor Chemie beheben.',
+        humid:
+          'Luft und Drainage: breite Wege, bei Bedarf Hochbeete, Lueftungsschnitte in der Krone. Kompost bei Faulgeruch oder Staunaesse wenden; Gruen mit Braun ausgleichen. Feuchte beguenstigt Pilze und weiche Insekten – morgens kontrollieren, Vlies in kritischen Phasen, infiziertes Material schnell entfernen.',
+        cold:
+          'Waerme und Timing: groessere Haufen speichern Hitze; mit Stroh oder Planen isolieren; Material fein zerkleinern fuer kurze Saison. Jungpflanzen mit Tunnel/Vlies schuetzen; nassen Boden nicht bearbeiten. Kurze Vegetation erzwingt Praevention – sortentypische Frosttermine, Vorgezogene haerten, Vlies gegen Fruehschaedlinge.',
+        temperate:
+          'Konstante Routine: ganzjaehrige Bodenbedeckung, regelmaessiger Kompost, Fruchtfolge gegen Schaedlingszyklen. Schnelles Wetter – Kompostfeuchte gleichmaessig halten, bei Abkuehlung wenden. Bluehstreifen und ungestoerte Saumraender fuer Nuetzlinge; in Wachstumsspitzen woechentlich scouten.',
       },
       compostingLayersAlt: 'Kompost-Schichtdiagramm',
-      compostingLayersCaption: 'Braune Deckschicht, Gruen/Braun-Folge und Luftkanalstruktur.',
+      compostingLayersCaption:
+        'Klassisch: grobes Braun unten fuer Luft, abwechselnd Gruen/Braun, braune Deckschicht gegen Geruch und Verdunstung – Dicke an Material und Klima anpassen.',
       compostPileLayeringAlt: 'Schichtfolge im Komposthaufen',
-      compostPileLayeringCaption: 'Schichtzyklus mit Wasser und Luft regelmaessig wiederholen.',
+      compostPileLayeringCaption:
+        'Jeder Zyklus liefert Struktur und Nahrung: Feuchte wie ausgewrungen; wenden wenn es kuehlt oder anaerob riecht.',
     },
     activity: {
       addActivityTitle: 'Aktivitätsprotokoll',
@@ -1637,6 +1772,7 @@ const translations = {
       haveAccount: 'Du hast bereits ein Konto? Anmelden',
       noAccount: 'Noch kein Konto? Registrieren',
       logout: 'Abmelden',
+      logoutConfirm: 'Abmelden?',
       forgotPassword: 'Passwort vergessen?',
       backToLogin: 'Zurück zum Login',
       resetPassword: 'Passwort zurücksetzen',
@@ -1646,6 +1782,7 @@ const translations = {
     },
     fields: {
       activeField: 'Aktives Feld',
+      myfFieldsTitle: 'Meine Felder',
       addField: 'Feld hinzufügen',
       editField: 'Feld bearbeiten',
       deleteField: 'Feld löschen',
@@ -1900,6 +2037,31 @@ const translations = {
           ],
         },
       },
+      cropTasks: {
+        selectedCropsFallback: 'cultivos seleccionados',
+        dosage: {
+          title: 'Aplicar compost específico para {crops}',
+          whyThisTaskHelps:
+            'Mantiene el aporte de nutrientes alineado con el tamaño del campo y la demanda del cultivo (objetivo: {compostKg} kg).',
+          step1: 'Distribuye el compost en dos pasadas para evitar parches.',
+          step2: 'Apunta a {compostKg} kg en total y evita amontonar contra los tallos.',
+          step3: 'Riega ligeramente después del encalado superficial para activar la biología del suelo.',
+        },
+        layout: {
+          title: 'Validar distancia entre hileras y asociaciones',
+          whyThisTaskHelps: 'Mejora el flujo de aire y la compatibilidad y reduce la presión de enfermedades.',
+          spacingFallback: 'Mantén un plan de distancia entre hileras coherente.',
+          stepSpacing: 'Respeta el espaciado por cultivo para evitar solapamiento del dosel.',
+          stepSeparate: 'Separa pares de cultivos incompatibles en zonas distintas.',
+        },
+        safety: {
+          title: 'Revisar el umbral de pesticida antes del próximo tratamiento',
+          whyThisTaskHelps: 'Evita el exceso más allá de la tolerancia del cultivo.',
+          stepUsage: 'Uso químico semanal actual: {pesticideL} L (contexto para los cultivos seleccionados).',
+          stepThreshold: 'Límite estricto: {toleranceL} L.',
+          stepScout: 'Si estás cerca del umbral, prioriza el monitoreo y el control biológico.',
+        },
+      },
     },
     compostWizard: {
       wasteInventory: 'Inventario de Residuos',
@@ -2025,6 +2187,7 @@ const translations = {
       tocZone: 'Tu clima',
       categoriesUnavailable: 'Categorías del Knowledge Hub no disponibles.',
       couldNotLoadKnowledgeHub: 'No se pudo cargar el Knowledge Hub.',
+      closeReading: 'Cerrar lectura',
     },
     keyPanel: {
       title: 'Clave API de Gemini (Prueba)',
@@ -2131,27 +2294,40 @@ const translations = {
         compostBasicsDesc: 'Primero construye compost estable; apoya microbios beneficos.',
       },
       whyHeading: 'Por que la agricultura sostenible empieza en el suelo',
-      whyBody: 'El suelo es un sistema vivo. La materia organica, humedad y aireacion sostienen la fertilidad.',
-      pullQuoteWhy: 'Si alimentas la red biologica del suelo, prevenir plagas es mas facil.',
+      whyBody:
+        'El suelo no es solo “tierra”: es una comunidad de bacterias, hongos, raices y otros organismos. Al proteger la materia organica, la humedad y el oxigeno en el perfil, alimentas la red trofica del suelo que recicla nutrientes y mantiene la estructura.\n\nEl manejo sostenible de plagas es mas sencillo cuando las plantas no estan estresadas de forma cronica. Raices fuertes, nutricion adecuada y biologia resiliente del suelo reducen la dependencia de rescates quimicos. El compost y el manejo de residuos alimentan esa biologia con el tiempo.',
+      pullQuoteWhy:
+        'Alimenta de forma estable la red biologica del suelo y muchos problemas de plagas se previenen antes de crecer.',
       whyBullets: [
-        'Un suelo sano mejora el vigor de las plantas.',
-        'La materia organica estabiliza nutrientes en el tiempo.',
-        'Cobertura y compost constante mantienen activo el ecosistema.',
+        'Un suelo sano mejora el vigor y la exploracion radicular; menos estres, menos riesgo de plagas y enfermedades.',
+        'La materia organica amortigua agua y nutrientes en sequias o lluvias intensas.',
+        'Residuos diversos y compost apoyan una gama mas amplia de organismos beneficos.',
+        'Una estructura estable mejora la infiltracion y reduce la erosion.',
+        'La cobertura viva o muerta modera la temperatura y puede bajar la competencia de malezas.',
+        'Un plan a largo plazo combina observacion frecuente y ajustes pequenos en lugar de parches unicos.',
       ],
       pesticideHeading: 'Conciencia sobre pesticidas: que puede cambiar',
-      pesticideBody: 'Algunos pesticidas afectan tambien microbios utiles y pueden frenar procesos del suelo.',
-      pullQuotePesticide: 'La meta es resiliencia biologica del suelo, no una regla rigida.',
+      pesticideBody:
+        'Algunos productos estan disenados para plagas especificas, pero muchas formulaciones tambien pueden afectar organismos no objetivo en el suelo. Microbios que descomponen residuos, fijan nitrogeno o ayudan a la nutricion pueden ser sensibles a usos repetidos o de amplio espectro. Si esas comunidades se debilitan, la materia organica madura mas lento y el ciclo de nutrientes se frena.\n\nEl MIP favorece monitoreo, umbrales, culturales y rotacion antes de que la quimica sea lo habitual. Momento, dosis, lugar y eleccion del ingrediente activo importan. Pensar en temporadas, no en una sola aplicacion, ayuda a mantener la biologia del suelo resiliente.',
+      pullQuotePesticide:
+        'La meta no es “cero quimicos”, sino mantener viva y resiliente la biologia del suelo mientras proteges el cultivo.',
       pesticideBullets: [
-        'Los insumos quimicos pueden reducir diversidad microbiana.',
-        'Menor actividad puede ralentizar ciclos de nutrientes.',
-        'Prioriza monitoreo temprano y manejo integrado.',
+        'Los insumos quimicos pueden reducir diversidad microbiana y actividad enzimatica.',
+        'Menor actividad puede ralentizar la descomposicion y la madurez del compost.',
+        'Repetir el mismo modo de accion puede favorecer resistencias en plagas.',
+        'La deriva y el escurrimiento afectan bordes y cuerpos de agua: planifica buffer y ventanas de clima.',
+        'Rotacion, variedades resistentes, sanidad y cobertura del suelo suelen reducir la necesidad de aplicar.',
+        'Lleva registros de que, donde y cuando aplicaste; mejora decisiones la siguiente temporada.',
       ],
       infographicBenefitsAlt: 'Infografia de beneficios de agricultura sostenible',
-      infographicCycleCaption: 'Materia organica -> microbios -> nutrientes -> absorcion de plantas.',
+      infographicCycleCaption:
+        'La materia organica alimenta la vida del suelo; microbios y hongos liberan nutrientes asimilables; raices y coberturas devuelven carbono y estructura.',
       infographicNutrientCycleAlt: 'Infografia de ciclo de nutrientes y microbios',
-      infographicCompostLayersCaption: 'Guia de capas verdes/marrones, humedad y aire.',
+      infographicCompostLayersCaption:
+        'Marrones (ricos en carbono) y verdes (ricos en nitrogeno) en capas, humedad como una esponja escurrida y espacio para aire; revuelve cuando haga falta oxigeno.',
       locationHeading: 'Compost y control de plagas segun ubicacion',
-      locationBody: 'El clima local influye en descomposicion y comportamiento de plagas. Ajusta segun observacion.',
+      locationBody:
+        'Tu clima marca la velocidad del compost, la frecuencia de volteo y cuando las plagas pican en temporada. Lo que funciona en un valle humedo no es igual en montana o en zona arida. Usa las notas de zona como marco y afinar con diario de campo, ventanas de clima y observacion real.',
       locationZoneTitle: 'Enfoque climatico local',
       locationZone: {
         dry: 'Enfoque zona seca',
@@ -2160,15 +2336,21 @@ const translations = {
         temperate: 'Enfoque templado',
       },
       locationZoneTips: {
-        dry: 'Conserva humedad: acolcha, riega profundo y menos frecuente, cubre compost.',
-        humid: 'Prioriza ventilacion y cobertura del suelo; evita exceso de humedad.',
-        cold: 'Compostaje lento y estable; protege plantulas sensibles.',
-        temperate: 'Mantener constancia: cobertura, compost y monitoreo temprano.',
+        dry:
+          'Prioriza retencion de humedad: acolchado grueso, riego profundo y poco frecuente, cortavientos donde el viento seca. Cubre o entierra parcialmente el compost; humedece al voltear sin encharcar. Las plantas estresadas atraen problemas: revisa el envés de las hojas y corrige el agua antes de la quimica.',
+        humid:
+          'Prioriza drenaje y aire: caminos anchos, camas elevadas si hace falta, y poda que abre el dosel. Voltea el compost si huele agrio o esta empapado; equilibra verdes con marrones. La humedad favorece hongos e insectos blandos: monitorea al alba, usa malla en etapas vulnerables y retira residuo infectado rapido.',
+        cold:
+          'Prioriza aislamiento y calendario: montones grandes retienen calor; aislalos con paja o lona; trocea fino para temporadas cortas. Protege plantulas con tunel o malla; no trabajes suelo empapado. La ventana corta exige prevencion: variedades adecuadas al helado, endurecimiento de plantulas y malla para plagas tempranas.',
+        temperate:
+          'Busca rutinas estables: cobertura, compost regular y rotacion para romper ciclos de plagas. El clima cambia rapido: manten humedad uniforme en compost y voltea cuando enfria. Crea habitat para beneficiosos (franjas floridas, bordes) y monitorea semanalmente en picos de crecimiento.',
       },
       compostingLayersAlt: 'Diagrama de capas de compost',
-      compostingLayersCaption: 'Capa superior marron, ciclo verde/marron y estructura de aireacion.',
+      compostingLayersCaption:
+        'Clasico: marrones gruesos abajo para aire, alternancia verde/marron y capa marron superior para olores y retencion de humedad.',
       compostPileLayeringAlt: 'Secuencia de capas del monton de compost',
-      compostPileLayeringCaption: 'Repite el ciclo de capas con agua y aire para una descomposicion activa.',
+      compostPileLayeringCaption:
+        'Cada ciclo aporta estructura y alimento: humedad como esponja escurrida; voltea si enfria o huele anaerobico.',
     },
     activity: {
       addActivityTitle: 'Registro de Actividades',
@@ -2196,6 +2378,7 @@ const translations = {
       haveAccount: '¿Ya tienes cuenta? Inicia sesión',
       noAccount: '¿No tienes cuenta? Regístrate',
       logout: 'Cerrar sesión',
+      logoutConfirm: '¿Cerrar sesión?',
       forgotPassword: '¿Olvidaste tu contraseña?',
       backToLogin: 'Volver al inicio de sesión',
       resetPassword: 'Restablecer contraseña',
@@ -2205,6 +2388,7 @@ const translations = {
     },
     fields: {
       activeField: 'Campo activo',
+      myfFieldsTitle: 'Mis campos',
       addField: 'Agregar campo',
       editField: 'Editar campo',
       deleteField: 'Eliminar campo',
@@ -2459,6 +2643,30 @@ const translations = {
           ],
         },
       },
+      cropTasks: {
+        selectedCropsFallback: '所选作物',
+        dosage: {
+          title: '为 {crops} 施用针对性的堆肥',
+          whyThisTaskHelps: '使养分供应与地块面积和作物需求匹配（目标：{compostKg} 千克）。',
+          step1: '分两次撒施堆肥，避免厚薄不均。',
+          step2: '合计目标 {compostKg} 千克，避免堆在茎秆基部。',
+          step3: '表施后轻灌，激活土壤生物活性。',
+        },
+        layout: {
+          title: '核对行距与伴生搭配',
+          whyThisTaskHelps: '改善通风与兼容性，降低病害压力。',
+          spacingFallback: '保持稳定的行距方案。',
+          stepSpacing: '按作物保持株行距，避免冠层重叠。',
+          stepSeparate: '将不相容的作物组合分到不同区域。',
+        },
+        safety: {
+          title: '下次施药前核对农药阈值',
+          whyThisTaskHelps: '避免超过作物耐受量。',
+          stepUsage: '本周化学用量：{pesticideL} 升（结合已选作物情境）。',
+          stepThreshold: '硬性上限：{toleranceL} 升。',
+          stepScout: '接近阈值时，转为巡查与生物防控。',
+        },
+      },
     },
     compostWizard: {
       wasteInventory: '废弃物清单',
@@ -2584,6 +2792,7 @@ const translations = {
       tocZone: '当地气候',
       categoriesUnavailable: '知识中心分类不可用。',
       couldNotLoadKnowledgeHub: '无法加载知识中心。',
+      closeReading: '关闭阅读',
     },
     keyPanel: {
       title: 'Gemini API 密钥（测试）',
@@ -2689,27 +2898,38 @@ const translations = {
         compostBasicsDesc: '先做好稳定堆肥，可支持有益微生物并改善土壤生态。',
       },
       whyHeading: '为什么可持续农业从土壤健康开始',
-      whyBody: '土壤是一个生命系统。管理好有机质、湿度与通气，才能建立长期肥力。',
-      pullQuoteWhy: '喂养土壤食物网，病虫问题往往更容易预防。',
+      whyBody:
+        '土壤不只是“泥巴”，而是由细菌、真菌、根系等共同组成的网络。保护有机质、调节水分与通气，才能支撑养分循环与稳定的团粒结构。\n\n当植株长期不处于胁迫状态时，病虫害管理会更轻松。健壮的根系、均衡的养分与有韧性的土壤生物群，可以减少对化学手段的依赖。堆肥与合理的秸秆/残茬管理会持续喂养土壤生物，使肥力更可持续。',
+      pullQuoteWhy: '持续喂养土壤食物网，许多病虫害问题可以在扩大之前被预防。',
       whyBullets: [
-        '健康土壤可提升植株活力与抗逆性。',
-        '有机质有助于稳定养分供应。',
-        '持续覆盖与堆肥可维持土壤生态活性。',
+        '健康土壤提升植株活力与根系伸展空间，降低胁迫相关的病虫风险。',
+        '有机质缓冲水肥供应，在干旱或连阴雨时更平稳。',
+        '多样化的残茬与堆肥投入有利于有益生物的多样性。',
+        '稳定的结构改善入渗、减少侵蚀与植株胁迫。',
+        '活覆盖或死覆盖可缓和土温，并抑制与作物抢资源的杂草旺发。',
+        '长期策略强调持续观察与小步调整，而不是一次性“补救”。',
       ],
       pesticideHeading: '农药认知：化学使用会改变什么',
-      pesticideBody: '部分农药不仅影响目标害虫，也可能影响有益微生物，降低土壤生物活性。',
-      pullQuotePesticide: '目标不是绝对零投入，而是维持土壤生命系统韧性。',
+      pesticideBody:
+        '有些药剂针对特定害虫设计，但不少配方仍可能影响土壤中的非靶标生物。参与分解残体、固氮或协助养分吸收的微生物，可能对重复或广谱使用更敏感。若这些群落被削弱，有机质分解变慢、养分周转受阻，作物也可能出现“测土看起来正常”但仍有隐性饥饿。\n\n综合防治强调先巡查、阈值、文化措施与轮作，再让化学成为选项之一。施用时，时机、剂量、位置与有效成分的选择都会影响与地下生物的交互。以季节为尺度思考，而不是单次喷雾，更有利于保持土壤生物韧性。',
+      pullQuotePesticide: '目标不是绝对零投入，而是在保护作物的同时维持土壤生命系统的韧性。',
       pesticideBullets: [
-        '化学投入可能降低微生物多样性。',
-        '微生物活性下降会减缓养分循环。',
-        '优先采用监测、覆盖与综合防治策略。',
+        '化学投入可能降低微生物多样性与酶活性。',
+        '微生物活性下降会减缓有机质分解与堆肥腐熟。',
+        '长期重复使用同一作用机制可能强化害虫的选择压力。',
+        '飘移与径流可能影响田边与水体，应规划缓冲带与施药窗口。',
+        '轮作、抗病品种、田园卫生与覆盖常能减少施药次数。',
+        '记录施用药剂、地块与时间，有助于下一季改进决策。',
       ],
       infographicBenefitsAlt: '可持续农业收益信息图',
-      infographicCycleCaption: '有机质 -> 微生物 -> 养分 -> 植物吸收 的循环示意。',
+      infographicCycleCaption:
+        '有机质喂养土壤生命；微生物与真菌释放植物可摄取的养分；根系与覆盖作物把碳与结构带回系统。',
       infographicNutrientCycleAlt: '土壤养分与微生物循环信息图',
-      infographicCompostLayersCaption: '绿料/棕料分层、含水与通气管理示意。',
+      infographicCompostLayersCaption:
+        '棕料（偏碳）与绿料（偏氮）分层，含水量接近拧干海绵，并保留足够的孔隙通气；需要时翻堆补氧。',
       locationHeading: '基于地区的堆肥与病虫管理建议',
-      locationBody: '本地气候会影响堆肥速度和病虫动态，请结合田间观察调整。',
+      locationBody:
+        '气候决定堆肥腐熟速度、翻堆频率以及病虫害在季节中的峰期。湿润河谷与高原冷凉区、干旱区策略并不相同。请把下面的分区要点当作框架，再用手写田情、天气窗口与现场观察来微调堆肥配方与防治措施。',
       locationZoneTitle: '你的本地气候重点',
       locationZone: {
         dry: '干旱地区重点',
@@ -2718,15 +2938,21 @@ const translations = {
         temperate: '温带地区重点',
       },
       locationZoneTips: {
-        dry: '优先保水：加强覆盖，深灌少灌，保持堆肥湿润且遮盖。',
-        humid: '优先通风与地表覆盖，避免持续过湿环境。',
-        cold: '采取缓慢稳定堆肥，保护幼苗免受低温伤害。',
-        temperate: '保持一致管理：覆盖、堆肥与早期巡查并行。',
+        dry:
+          '优先保水：厚覆盖、深灌少灌、在风大处设防风。堆肥宜遮盖或半埋，翻堆时分次补水避免干成粉。胁迫植株更易招虫，先查叶背与地表，再处理水分胁迫，最后才考虑化学手段。',
+        humid:
+          '优先通风与排水：宽步道、必要时抬高床面，修剪保持冠层通透。堆肥若酸臭或积水应翻堆，并增加棕料比例。高湿易促真菌与软体害虫，清晨巡查，脆弱阶段可用防虫网，及时清理病残体。',
+        cold:
+          '优先保温与节奏：大堆体更保热，用草帘或篷布保温，切碎物料以利短季节升温。幼苗用拱棚等保护，避免在湿土上作业。生长季短，更要提前预防：选对霜期品种、炼苗，并防早春害虫。',
+        temperate:
+          '保持全年覆盖、规律补堆肥与轮作以打断害虫循环。天气变化快，堆肥水分要均匀，降温停滞时翻堆。可设花带与少扰动边界以庇护天敌；在快速生长期每周巡查，把小问题控制在早期。',
       },
       compostingLayersAlt: '堆肥分层示意图',
-      compostingLayersCaption: '顶部棕料封层与绿棕循环分层及通气结构。',
+      compostingLayersCaption:
+        '经典做法：底层粗棕料通气，绿棕交替，上层棕料封盖以抑制异味与保水；厚度按物料与气候调整。',
       compostPileLayeringAlt: '堆肥堆分层顺序图',
-      compostPileLayeringCaption: '结合水分与空气，持续重复分层循环。',
+      compostPileLayeringCaption:
+        '每一轮循环补充结构与“食物”：含水量接近拧干海绵；中心降温或出现厌氧气味时翻堆。',
     },
     activity: {
       addActivityTitle: '活动记录',
@@ -2754,6 +2980,7 @@ const translations = {
       haveAccount: '已有账号？去登录',
       noAccount: '没有账号？去注册',
       logout: '退出登录',
+      logoutConfirm: '退出登录？',
       forgotPassword: '忘记密码？',
       backToLogin: '返回登录',
       resetPassword: '重置密码',
@@ -2763,6 +2990,7 @@ const translations = {
     },
     fields: {
       activeField: '当前田块',
+      myfFieldsTitle: '我的田地',
       addField: '添加田块',
       editField: '编辑田块',
       deleteField: '删除田块',

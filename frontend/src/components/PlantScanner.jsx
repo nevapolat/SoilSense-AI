@@ -109,7 +109,7 @@ export default function PlantScanner({ onScanComplete, lang } = {}) {
         <p className="dashboard-subtitle">{t('plantScanner.subtitle')}</p>
       </header>
 
-      <section className="card">
+      <section className="card" data-tour="plant-scan">
         <div className="card-body">
           <div className="scanner-grid">
             <div className="scanner-upload">

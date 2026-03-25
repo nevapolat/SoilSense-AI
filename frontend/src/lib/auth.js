@@ -1,3 +1,7 @@
+import { getSupabaseClient, isRemoteAuthConfigured } from './supabaseClient.js'
+
+export { isRemoteAuthConfigured as isRemoteAuthEnabled } from './supabaseClient.js'
+
 const AUTH_DB_KEY = 'soilsense.auth.db.v1'
 const AUTH_DB_MIRROR_KEY = 'soilsense.auth.db.mirror.v1'
 const AUTH_SESSION_KEY = 'soilsense.auth.session.v1'
@@ -5,6 +9,13 @@ const AUTH_RESET_KEY = 'soilsense.auth.reset.v1'
 const DEVICE_ID_KEY = 'soilsense.auth.deviceId.v1'
 const AUTH_REMEMBERED_EMAIL_KEY = 'soilsense.auth.rememberedEmail.v1'
 const AUTH_REMEMBERED_PASSWORD_KEY = 'soilsense.auth.rememberedPassword.v1'
+
+/** When using Supabase, the active user row is kept here and synced to `user_profiles`. */
+let remoteUserCache = null
+
+export function clearRemoteUserCache() {
+  remoteUserCache = null
+}
 
 /** Captured at module load before installScopedLocalStorage() replaces localStorage methods. */
 const W = typeof window !== 'undefined' ? window : null
@@ -57,6 +68,206 @@ function fromBase64(value) {
 
 export function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase()
+}
+
+function isRemoteAuth() {
+  return isRemoteAuthConfigured()
+}
+
+function sanitizeUserForRemote(user) {
+  if (!user || typeof user !== 'object') return user
+  const { password: _p, ...rest } = user
+  return { ...rest, password: null }
+}
+
+function mergeStoredUserPayload(payload, userId) {
+  const p = typeof payload === 'object' && payload ? payload : {}
+  const email = typeof p.email === 'string' ? normalizeEmail(p.email) : ''
+  return {
+    id: userId,
+    email: email || normalizeEmail(p.email),
+    password: null,
+    hasCompletedTour: Boolean(p.hasCompletedTour),
+    activeFieldId: typeof p.activeFieldId === 'string' || p.activeFieldId === null ? p.activeFieldId : null,
+    fields: Array.isArray(p.fields) ? p.fields : [],
+    trustedDeviceIds: Array.isArray(p.trustedDeviceIds) ? p.trustedDeviceIds : [],
+    createdAt: typeof p.createdAt === 'string' ? p.createdAt : new Date().toISOString(),
+  }
+}
+
+async function fetchRemoteProfile(userId) {
+  const sb = getSupabaseClient()
+  if (!sb) return null
+  const { data, error } = await sb.from('user_profiles').select('data').eq('id', userId).maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data?.data) return null
+  return mergeStoredUserPayload(data.data, userId)
+}
+
+async function upsertRemoteProfile(user) {
+  const sb = getSupabaseClient()
+  if (!sb || !user?.id) return
+  const row = {
+    id: user.id,
+    email: normalizeEmail(user.email) || null,
+    data: sanitizeUserForRemote(user),
+    updated_at: new Date().toISOString(),
+  }
+  const { error } = await sb.from('user_profiles').upsert(row, { onConflict: 'id' })
+  if (error) throw new Error(error.message)
+}
+
+async function defaultRemoteUser(uid, emailFromAuth) {
+  const email = normalizeEmail(emailFromAuth || '')
+  return {
+    id: uid,
+    email,
+    password: null,
+    hasCompletedTour: false,
+    activeFieldId: null,
+    fields: [],
+    trustedDeviceIds: [],
+    createdAt: new Date().toISOString(),
+  }
+}
+
+async function signUpRemote({ email: normalizedEmail, password, rememberMe }) {
+  const sb = getSupabaseClient()
+  if (!sb) throw new Error('Cloud sign-up is not configured.')
+  const { data, error } = await sb.auth.signUp({ email: normalizedEmail, password })
+  if (error) throw new Error(error.message)
+  const uid = data.user?.id
+  if (!uid) throw new Error('Sign up failed.')
+  if (!data.session) {
+    throw new Error('Check your email to confirm your account, then sign in here.')
+  }
+  let user = await fetchRemoteProfile(uid)
+  if (!user) {
+    user = await defaultRemoteUser(uid, data.user?.email || normalizedEmail)
+    await upsertRemoteProfile(user)
+  }
+  remoteUserCache = { userId: uid, user }
+  const session = {
+    userId: uid,
+    rememberMe: Boolean(rememberMe),
+    createdAt: new Date().toISOString(),
+  }
+  persistSession(session)
+  if (rememberMe) {
+    setRememberedEmail(normalizedEmail)
+    setRememberedPassword(password)
+  } else {
+    clearRememberedEmail()
+    clearRememberedPassword()
+  }
+  return session
+}
+
+async function loginRemote({ email, password, rememberMe }) {
+  const sb = getSupabaseClient()
+  if (!sb) throw new Error('Cloud login is not configured.')
+  const normalizedEmail = normalizeEmail(email) || (rememberMe ? getRememberedEmail() : '')
+  if (!normalizedEmail) throw new Error('Email is required.')
+  const passwordCandidate = String(password || '') || (rememberMe ? getRememberedPassword() : '')
+  if (!passwordCandidate) throw new Error('Password is required for this device.')
+  const { data, error } = await sb.auth.signInWithPassword({
+    email: normalizedEmail,
+    password: passwordCandidate,
+  })
+  if (error) throw new Error(error.message)
+  const uid = data.user?.id
+  if (!uid) throw new Error('Login failed.')
+  let user = await fetchRemoteProfile(uid)
+  if (!user) {
+    user = await defaultRemoteUser(uid, data.user?.email || normalizedEmail)
+    await upsertRemoteProfile(user)
+  }
+  remoteUserCache = { userId: uid, user }
+  const session = {
+    userId: uid,
+    rememberMe: Boolean(rememberMe),
+    createdAt: new Date().toISOString(),
+  }
+  persistSession(session)
+  if (rememberMe) {
+    setRememberedEmail(normalizedEmail)
+    if (passwordCandidate) setRememberedPassword(passwordCandidate)
+  } else {
+    clearRememberedEmail()
+    clearRememberedPassword()
+  }
+  return session
+}
+
+/**
+ * Call after Supabase recovery or when session already exists (e.g. password updated).
+ * @returns {Promise<{ userId: string, rememberMe: boolean, createdAt: string } | null>}
+ */
+export async function hydrateRemoteSessionAfterAuth() {
+  if (!isRemoteAuth()) return null
+  const sb = getSupabaseClient()
+  if (!sb) return null
+  const {
+    data: { session },
+  } = await sb.auth.getSession()
+  if (!session?.user?.id) return null
+  const uid = session.user.id
+  let user = await fetchRemoteProfile(uid)
+  if (!user) {
+    user = await defaultRemoteUser(uid, session.user.email || '')
+    await upsertRemoteProfile(user)
+  }
+  remoteUserCache = { userId: uid, user }
+  const s = {
+    userId: uid,
+    rememberMe: true,
+    createdAt: new Date().toISOString(),
+  }
+  persistSession(s)
+  return s
+}
+
+export async function completeRemotePasswordRecovery(newPassword) {
+  if (String(newPassword || '').length < 8) throw new Error('Password must be at least 8 characters.')
+  const sb = getSupabaseClient()
+  if (!isRemoteAuth() || !sb) throw new Error('Password recovery is not available.')
+  const { error } = await sb.auth.updateUser({ password: newPassword })
+  if (error) throw new Error(error.message)
+}
+
+/**
+ * Resolves the current session: local storage auth, or Supabase session + profile.
+ */
+export async function bootstrapAuth() {
+  if (!isRemoteAuth()) {
+    return { session: restoreSession(), ready: true }
+  }
+  remoteUserCache = null
+  const sb = getSupabaseClient()
+  if (!sb) {
+    return { session: null, ready: true }
+  }
+  const {
+    data: { session },
+  } = await sb.auth.getSession()
+  if (!session?.user?.id) {
+    return { session: null, ready: true }
+  }
+  const uid = session.user.id
+  let user = await fetchRemoteProfile(uid)
+  if (!user) {
+    user = await defaultRemoteUser(uid, session.user.email || '')
+    await upsertRemoteProfile(user)
+  }
+  remoteUserCache = { userId: uid, user }
+  return {
+    session: {
+      userId: uid,
+      rememberMe: true,
+      createdAt: new Date().toISOString(),
+    },
+    ready: true,
+  }
 }
 
 function makeId(prefix) {
@@ -113,6 +324,10 @@ export function getRememberedEmail() {
 }
 
 function loadDb() {
+  if (isRemoteAuth()) {
+    if (!remoteUserCache?.user) return { users: [] }
+    return { users: [remoteUserCache.user] }
+  }
   let users = []
   try {
     const raw = authLocalGet(AUTH_DB_KEY)
@@ -180,6 +395,16 @@ function loadDb() {
 }
 
 function saveDb(db) {
+  if (isRemoteAuth()) {
+    const u = db.users?.[0]
+    if (u && remoteUserCache?.userId === u.id) {
+      remoteUserCache = { userId: u.id, user: u }
+      void upsertRemoteProfile(u).catch((err) => {
+        if (typeof console !== 'undefined' && console.error) console.error('[auth] profile sync failed', err)
+      })
+    }
+    return
+  }
   const serialized = JSON.stringify(db)
   authLocalSet(AUTH_DB_KEY, serialized)
   try {
@@ -195,6 +420,10 @@ function getUserByEmail(db, email) {
 }
 
 export function getUserById(userId) {
+  if (isRemoteAuth()) {
+    if (remoteUserCache?.userId === userId) return remoteUserCache.user
+    return null
+  }
   const db = loadDb()
   return db.users.find((u) => u.id === userId) || null
 }
@@ -237,6 +466,10 @@ export async function signUpWithEmail({ email, password, rememberMe }) {
   if (!normalizedEmail.includes('@')) throw new Error('Invalid email address.')
   if (String(password || '').length < 8) throw new Error('Password must be at least 8 characters.')
 
+  if (isRemoteAuth()) {
+    return signUpRemote({ email: normalizedEmail, password, rememberMe })
+  }
+
   const db = loadDb()
   if (getUserByEmail(db, normalizedEmail)) {
     throw new Error('Account already exists for this email.')
@@ -276,6 +509,11 @@ export async function signUpWithEmail({ email, password, rememberMe }) {
 export async function loginWithEmail({ email, password, rememberMe }) {
   const normalizedEmail = normalizeEmail(email) || (rememberMe ? getRememberedEmail() : '')
   if (!normalizedEmail) throw new Error('Email is required.')
+
+  if (isRemoteAuth()) {
+    return loginRemote({ email, password, rememberMe })
+  }
+
   const db = loadDb()
   const user = getUserByEmail(db, normalizedEmail)
   if (!user) throw new Error('No account found for this email.')
@@ -349,7 +587,16 @@ export function restoreSession() {
   return session
 }
 
-export function logoutSession() {
+export async function logoutSession() {
+  if (isRemoteAuth()) {
+    try {
+      const sb = getSupabaseClient()
+      if (sb) await sb.auth.signOut()
+    } catch {
+      // ignore
+    }
+    remoteUserCache = null
+  }
   authLocalRemove(AUTH_SESSION_KEY)
   authSessionRemove(AUTH_SESSION_KEY)
   // Remember-me is for the login form only; clear it so logout always lands on a fresh login (no auto-login).
@@ -486,8 +733,16 @@ function saveResetRequests(items) {
   authLocalSet(AUTH_RESET_KEY, JSON.stringify(items))
 }
 
-export function requestPasswordReset(email) {
+export async function requestPasswordReset(email) {
   const normalizedEmail = normalizeEmail(email)
+  if (isRemoteAuth()) {
+    const sb = getSupabaseClient()
+    if (!sb) return { sent: true, link: '' }
+    const redirectTo = `${window.location.origin}${window.location.pathname}`
+    const { error } = await sb.auth.resetPasswordForEmail(normalizedEmail, { redirectTo })
+    if (error) throw new Error(error.message)
+    return { sent: true, link: '' }
+  }
   const db = loadDb()
   const user = getUserByEmail(db, normalizedEmail)
   // Always return success-looking response to avoid account enumeration.

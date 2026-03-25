@@ -82,11 +82,14 @@ function toAreaSqm(areaHa) {
 
 function scoreCropForContext(crop, { soilType, climateZoneHint }) {
   let score = 0
+  const soils = Array.isArray(crop?.suitableSoils) ? crop.suitableSoils : []
+  const tags = Array.isArray(crop?.climateTags) ? crop.climateTags : []
+  const regions = Array.isArray(crop?.regions) ? crop.regions : []
   const soil = String(soilType || 'loam').toLowerCase()
   const climate = String(climateZoneHint || 'temperate').toLowerCase()
-  if (crop.suitableSoils.includes(soil)) score += 3
-  if (crop.climateTags.some((tag) => climate.includes(tag))) score += 2
-  if (crop.regions.some((region) => climate.includes(region))) score += 1
+  if (soils.includes(soil)) score += 3
+  if (tags.some((tag) => climate.includes(tag))) score += 2
+  if (regions.some((region) => climate.includes(region))) score += 1
   return score
 }
 
@@ -182,13 +185,23 @@ export function buildFieldPlan({ profile, climateZoneHint, activityImpact }) {
     selectedCrops = recommendedCropIds.slice(0, 1).map((id) => CROP_LIBRARY[id]).filter(Boolean)
   }
 
-  const dosageByCrop = selectedCrops.map((crop) => ({
-    cropId: crop.id,
-    cropName: crop.name,
-    compostKg: Math.round(crop.compostKgPerHa * areaHa),
-    pesticideL: Number((crop.pesticideLPerHa * areaHa).toFixed(2)),
-    pesticideToleranceL: Number((crop.pesticideToleranceLPerHa * areaHa).toFixed(2)),
-  }))
+  const dosageByCrop = selectedCrops.map((crop) => {
+    const compostPerHa =
+      typeof crop?.compostKgPerHa === 'number' && Number.isFinite(crop.compostKgPerHa) ? crop.compostKgPerHa : 2000
+    const pestPerHa =
+      typeof crop?.pesticideLPerHa === 'number' && Number.isFinite(crop.pesticideLPerHa) ? crop.pesticideLPerHa : 2
+    const tolPerHa =
+      typeof crop?.pesticideToleranceLPerHa === 'number' && Number.isFinite(crop.pesticideToleranceLPerHa)
+        ? crop.pesticideToleranceLPerHa
+        : 3
+    return {
+      cropId: crop.id,
+      cropName: crop.name,
+      compostKg: Math.round(compostPerHa * areaHa),
+      pesticideL: Number((pestPerHa * areaHa).toFixed(2)),
+      pesticideToleranceL: Number((tolPerHa * areaHa).toFixed(2)),
+    }
+  })
 
   const totalCompostKg = dosageByCrop.reduce((sum, x) => sum + x.compostKg, 0)
   const totalPesticideL = Number(dosageByCrop.reduce((sum, x) => sum + x.pesticideL, 0).toFixed(2))
@@ -200,7 +213,9 @@ export function buildFieldPlan({ profile, climateZoneHint, activityImpact }) {
     for (let j = i + 1; j < selectedCrops.length; j += 1) {
       const a = selectedCrops[i]
       const b = selectedCrops[j]
-      if (a.antagonists.includes(b.id) || b.antagonists.includes(a.id)) {
+      const antagonA = Array.isArray(a?.antagonists) ? a.antagonists : []
+      const antagonB = Array.isArray(b?.antagonists) ? b.antagonists : []
+      if (antagonA.includes(b.id) || antagonB.includes(a.id)) {
         compatibilityWarnings.push(`${a.name} and ${b.name} should be separated`)
         compatibilityWarningCodes.push({ code: 'separate-crops', cropAId: a.id, cropBId: b.id })
       }
@@ -213,7 +228,9 @@ export function buildFieldPlan({ profile, climateZoneHint, activityImpact }) {
     for (let j = i + 1; j < selectedCrops.length; j += 1) {
       const a = selectedCrops[i]
       const b = selectedCrops[j]
-      if (a.companions.includes(b.id) || b.companions.includes(a.id)) {
+      const compA = Array.isArray(a?.companions) ? a.companions : []
+      const compB = Array.isArray(b?.companions) ? b.companions : []
+      if (compA.includes(b.id) || compB.includes(a.id)) {
         companionPairs.push(`${a.name} + ${b.name}`)
         companionPairIds.push({ cropAId: a.id, cropBId: b.id })
       }
@@ -221,7 +238,12 @@ export function buildFieldPlan({ profile, climateZoneHint, activityImpact }) {
   }
 
   const averageRowSpacing =
-    selectedCrops.length > 0 ? selectedCrops.reduce((sum, x) => sum + x.rowSpacingM, 0) / selectedCrops.length : 1
+    selectedCrops.length > 0
+      ? selectedCrops.reduce((sum, x) => {
+          const row = typeof x?.rowSpacingM === 'number' && Number.isFinite(x.rowSpacingM) ? x.rowSpacingM : 0.85
+          return sum + row
+        }, 0) / selectedCrops.length
+      : 1
 
   const spacingPlan = {
     averageRowSpacingM: Number(averageRowSpacing.toFixed(2)),
@@ -234,8 +256,10 @@ export function buildFieldPlan({ profile, climateZoneHint, activityImpact }) {
     perCrop: selectedCrops.map((crop) => ({
       cropId: crop.id,
       cropName: crop.name,
-      rowSpacingM: crop.rowSpacingM,
-      plantSpacingM: crop.plantSpacingM,
+      rowSpacingM:
+        typeof crop?.rowSpacingM === 'number' && Number.isFinite(crop.rowSpacingM) ? crop.rowSpacingM : 0.85,
+      plantSpacingM:
+        typeof crop?.plantSpacingM === 'number' && Number.isFinite(crop.plantSpacingM) ? crop.plantSpacingM : 0.4,
     })),
   }
 
@@ -289,43 +313,109 @@ export function buildFieldPlan({ profile, climateZoneHint, activityImpact }) {
   }
 }
 
+/** Deterministic plan used when {@link buildFieldPlan} fails unexpectedly. */
+export function createFallbackFieldPlan() {
+  return buildFieldPlan({
+    profile: {},
+    climateZoneHint: 'Temperate',
+    activityImpact: {},
+  })
+}
+
+function interpolateCropTaskTemplate(str, values) {
+  if (typeof str !== 'string') return ''
+  let out = str
+  for (const [k, v] of Object.entries(values)) {
+    out = out.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v))
+  }
+  return out
+}
+
 export function buildCropDrivenDailyTasks(fieldPlan, t) {
   const crops = Array.isArray(fieldPlan?.selectedCrops) ? fieldPlan.selectedCrops : []
-  const cropNames = crops.map((x) => cropDisplayNameForTask(x, t)).join(', ') || 'selected crops'
+  const cropNames =
+    crops.map((x) => cropDisplayNameForTask(x, t)).join(', ') ||
+    (typeof t === 'function' ? t('dashboard.cropTasks.selectedCropsFallback') : 'selected crops')
   const dosage = fieldPlan?.dosage || {}
   const spacing = fieldPlan?.spacing || {}
+  const compostKg = dosage.compostKg || 0
+  const pesticideL = Number(dosage.pesticideL || 0).toFixed(2)
+  const toleranceL = Number(dosage.pesticideToleranceL || 0).toFixed(2)
+
+  const spacingGuidanceLine =
+    typeof t === 'function'
+      ? spacing.guidanceMode === 'wide'
+        ? t('fieldPlanner.rowGuidanceWide')
+        : spacing.guidanceMode === 'exact'
+          ? `${t('fieldPlanner.rowGuidanceExactPrefix')} ${Number(spacing.recommendedRowSpacingM || spacing.averageRowSpacingM || 0).toFixed(1)} ${t('fieldPlanner.meters')} ${t('fieldPlanner.rowGuidanceExactSuffix')}`
+          : spacing.rowGuidance || t('dashboard.cropTasks.layout.spacingFallback')
+      : spacing?.rowGuidance || ''
+
+  if (typeof t !== 'function') {
+    return [
+      {
+        id: 'crop-dosage-check',
+        title: `Apply crop-specific compost for ${cropNames}`,
+        whyThisTaskHelps: `Keeps nutrient delivery aligned with field size and crop demand (${compostKg} kg target).`,
+        steps: [
+          'Split compost in 2 passes to avoid patchy application.',
+          `Target ${compostKg} kg total and avoid piling against stems.`,
+          'Irrigate lightly after top-dressing to activate soil biology.',
+        ],
+        estimatedMinutes: 25,
+      },
+      {
+        id: 'crop-layout',
+        title: 'Validate row spacing and companion layout',
+        whyThisTaskHelps: 'Improves airflow and compatibility while reducing disease pressure.',
+        steps: [
+          spacingGuidanceLine,
+          'Follow per-crop spacing to avoid canopy overlap.',
+          'Separate incompatible crop pairs into different zones.',
+        ],
+        estimatedMinutes: 20,
+      },
+      {
+        id: 'crop-safety-threshold',
+        title: 'Check pesticide threshold before next spray',
+        whyThisTaskHelps: 'Prevents over-application beyond crop tolerance.',
+        steps: [
+          `Current weekly chemical usage: ${pesticideL} L target for selected crops.`,
+          `Hard stop threshold: ${toleranceL} L.`,
+          'If close to threshold, shift to scouting and biological control.',
+        ],
+        estimatedMinutes: 15,
+      },
+    ]
+  }
 
   return [
     {
       id: 'crop-dosage-check',
-      title: `Apply crop-specific compost for ${cropNames}`,
-      whyThisTaskHelps: `Keeps nutrient delivery aligned with field size and crop demand (${dosage.compostKg || 0} kg target).`,
+      title: interpolateCropTaskTemplate(t('dashboard.cropTasks.dosage.title'), { crops: cropNames }),
+      whyThisTaskHelps: interpolateCropTaskTemplate(t('dashboard.cropTasks.dosage.whyThisTaskHelps'), { compostKg }),
       steps: [
-        `Split compost in 2 passes to avoid patchy application.`,
-        `Target ${dosage.compostKg || 0} kg total and avoid piling against stems.`,
-        `Irrigate lightly after top-dressing to activate soil biology.`,
+        t('dashboard.cropTasks.dosage.step1'),
+        interpolateCropTaskTemplate(t('dashboard.cropTasks.dosage.step2'), { compostKg }),
+        t('dashboard.cropTasks.dosage.step3'),
       ],
       estimatedMinutes: 25,
     },
     {
       id: 'crop-layout',
-      title: `Validate row spacing and companion layout`,
-      whyThisTaskHelps: `Improves airflow and compatibility while reducing disease pressure.`,
-      steps: [
-        spacing?.rowGuidance || 'Keep a consistent row spacing plan.',
-        `Follow per-crop spacing to avoid canopy overlap.`,
-        `Separate incompatible crop pairs into different zones.`,
-      ],
+      title: t('dashboard.cropTasks.layout.title'),
+      whyThisTaskHelps: t('dashboard.cropTasks.layout.whyThisTaskHelps'),
+      steps: [spacingGuidanceLine, t('dashboard.cropTasks.layout.stepSpacing'), t('dashboard.cropTasks.layout.stepSeparate')],
       estimatedMinutes: 20,
     },
     {
       id: 'crop-safety-threshold',
-      title: `Check pesticide threshold before next spray`,
-      whyThisTaskHelps: `Prevents over-application beyond crop tolerance.`,
+      title: t('dashboard.cropTasks.safety.title'),
+      whyThisTaskHelps: t('dashboard.cropTasks.safety.whyThisTaskHelps'),
       steps: [
-        `Current weekly chemical usage: ${Number(dosage.pesticideL || 0).toFixed(2)} L target for selected crops.`,
-        `Hard stop threshold: ${Number(dosage.pesticideToleranceL || 0).toFixed(2)} L.`,
-        `If close to threshold, shift to scouting and biological control.`,
+        interpolateCropTaskTemplate(t('dashboard.cropTasks.safety.stepUsage'), { pesticideL }),
+        interpolateCropTaskTemplate(t('dashboard.cropTasks.safety.stepThreshold'), { toleranceL }),
+        t('dashboard.cropTasks.safety.stepScout'),
       ],
       estimatedMinutes: 15,
     },

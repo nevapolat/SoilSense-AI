@@ -1,11 +1,9 @@
 import { useMemo } from 'react'
-import { AlertTriangle, CheckCircle2, Map } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Map as MapIcon } from 'lucide-react'
 
 export default function FieldPlanner({ t, fieldPlan }) {
-  if (!fieldPlan) return null
-
-  const recommended = Array.isArray(fieldPlan.recommendations) ? fieldPlan.recommendations : []
-  const selected = Array.isArray(fieldPlan.selectedCrops) ? fieldPlan.selectedCrops : []
+  const recommended = Array.isArray(fieldPlan?.recommendations) ? fieldPlan.recommendations : []
+  const selected = Array.isArray(fieldPlan?.selectedCrops) ? fieldPlan.selectedCrops : []
 
   const cropNameById = useMemo(() => {
     const m = new Map()
@@ -15,9 +13,9 @@ export default function FieldPlanner({ t, fieldPlan }) {
     }
     return m
   }, [selected, t])
-  const dosage = fieldPlan.dosage || {}
-  const spacing = fieldPlan.spacing || {}
-  const compatibility = fieldPlan.compatibility || {}
+  const dosage = fieldPlan?.dosage || {}
+  const spacing = fieldPlan?.spacing || {}
+  const compatibility = fieldPlan?.compatibility || {}
   const safetyWarnings = Array.isArray(fieldPlan.safetyWarnings) ? fieldPlan.safetyWarnings : []
   const safetyWarningCodes = Array.isArray(fieldPlan.safetyWarningCodes) ? fieldPlan.safetyWarningCodes : []
   const companionPairIds = Array.isArray(compatibility.companionPairIds) ? compatibility.companionPairIds : []
@@ -60,7 +58,7 @@ export default function FieldPlanner({ t, fieldPlan }) {
       <div className="card-top">
         <div className="card-title-wrap">
           <h2 className="card-title">{t('fieldPlanner.title')}</h2>
-          <Map size={18} strokeWidth={1.7} className="card-accent-icon" />
+          <MapIcon size={18} strokeWidth={1.7} className="card-accent-icon" />
         </div>
         <div className="card-hint">{t('fieldPlanner.subtitle')}</div>
       </div>
