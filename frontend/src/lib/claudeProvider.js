@@ -143,11 +143,15 @@ export async function generateRegenerativeAdvice({
   const addressLine = typeof location?.address === 'string' && location.address.trim() ? location.address.trim() : 'unknown'
 
   const equipment = profile?.equipment && typeof profile.equipment === 'object' ? profile.equipment : {}
+  const equipmentCustom = Array.isArray(equipment?.custom)
+    ? equipment.custom.map((x) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean).slice(0, 6)
+    : []
   const equipmentList = [
     equipment?.shovel ? 'shovel' : null,
     equipment?.tractor ? 'tractor' : null,
     equipment?.sprinkler ? 'sprinkler' : null,
     equipment?.dripIrrigation ? 'drip irrigation' : null,
+    ...equipmentCustom,
   ]
     .filter(Boolean)
     .join(', ')

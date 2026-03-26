@@ -3,7 +3,10 @@ import { AlertTriangle, CheckCircle2, Map as MapIcon } from 'lucide-react'
 
 export default function FieldPlanner({ t, fieldPlan }) {
   const recommended = Array.isArray(fieldPlan?.recommendations) ? fieldPlan.recommendations : []
-  const selected = Array.isArray(fieldPlan?.selectedCrops) ? fieldPlan.selectedCrops : []
+  const selected = useMemo(
+    () => (Array.isArray(fieldPlan?.selectedCrops) ? fieldPlan.selectedCrops : []),
+    [fieldPlan]
+  )
 
   const cropNameById = useMemo(() => {
     const m = new Map()
