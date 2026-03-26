@@ -22,6 +22,7 @@ Yayin Linki: https://soilsensee.netlify.app/
 - `user-flow.md`
 - `tech-stack.md`
 - `yayin-linki.md`
+- `portfolio-linki.md`
 - `features/`
 - `agents/` (bonus)
 - `assets/` (bonus)
