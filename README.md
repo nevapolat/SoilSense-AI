@@ -1,26 +1,39 @@
 # SoilSense AI
 
-Web app for regenerative agriculture guidance, compost recipes, and soil-health insights.
+## Problem
+Agricultural soils are degrading due to excessive chemical input, poor irrigation habits, and climate instability. Small and medium producers need affordable, practical guidance to restore soil health and reduce production costs.
 
-## Project layout
+## Solution
+SoilSense AI helps growers make regenerative farming decisions with AI-powered recommendations. The app provides soil-health guidance, compost insights, and climate-aware suggestions for more sustainable production.
 
-| Path | Purpose |
-|------|---------|
-| **`frontend/`** | React (Vite) app — **run the app from here** |
-| `prd.md`, `tasks.md`, `tech-stack.md`, `idea.md` | Product / planning docs |
+## Canli Demo
+Yayin Linki: https://soilsensee.netlify.app/
+Demo Video: Eklenecek (YouTube/Loom linki hazir oldugunda guncellenecek)
 
-## Run locally
+## Kullanilan Teknolojiler
+- React.js (Vite)
+- Tailwind CSS
+- Lucide React
+- Google Gemini API
+- Netlify
 
+## Proje Dosya Yapisi
+- `README.md`
+- `idea.md`
+- `user-flow.md`
+- `tech-stack.md`
+- `features/`
+- `agents/` (bonus)
+- `assets/` (bonus)
+
+## Nasil Calistirilir?
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-Create `frontend/.env` for API keys (see app docs). It is gitignored.
-
 ## Build
-
 ```bash
 cd frontend
 npm run build
