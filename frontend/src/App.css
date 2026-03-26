@@ -1144,6 +1144,77 @@
   line-height: 1.4;
 }
 
+.knowledge-hub-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 168px;
+  padding: 8px 4px 4px;
+  text-align: center;
+}
+
+.knowledge-hub-loading-icon {
+  color: rgba(26, 67, 50, 0.55);
+  animation: knowledge-hub-spin 0.9s linear infinite;
+}
+
+@keyframes knowledge-hub-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.knowledge-hub-loading-skeleton {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.knowledge-hub-skel-line {
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(124, 166, 137, 0.12) 0%,
+    rgba(124, 166, 137, 0.22) 50%,
+    rgba(124, 137, 166, 0.12) 100%
+  );
+  background-size: 200% 100%;
+  animation: knowledge-hub-shimmer 1.4s ease-in-out infinite;
+}
+
+.knowledge-hub-skel-line--long {
+  width: 100%;
+}
+.knowledge-hub-skel-line--mid {
+  width: 78%;
+  align-self: center;
+}
+.knowledge-hub-skel-line--short {
+  width: 52%;
+  align-self: center;
+}
+
+@keyframes knowledge-hub-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+.knowledge-hub-loading-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  max-width: 28rem;
+}
+
 /* Gemini API Key testing panel */
 .gemini-key-card {
   border-color: rgba(27, 67, 50, 0.35);

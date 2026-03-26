@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { createLogger, normalizeErrorForLog } from './logger'
 import { extractJson } from './llmJson.js'
+import { estimateTextTokens, estimateBase64PayloadTokens } from './tokenEstimate.js'
 import {
   REG_AGRI_EXPERT_PERSONA,
   buildJsonTaskLanguageConstraint,
@@ -81,7 +82,16 @@ async function generateGeminiText(prompt, { apiKeyOverride } = {}) {
   const model = getGeminiModel({ apiKeyOverride })
   try {
     const result = await model.generateContent(prompt)
-    return result.response.text()
+    const out = result.response.text()
+    geminiLog.info('gemini.tokens.estimate', {
+      kind: 'text',
+      model: getResolvedGeminiModelName(),
+      promptChars: typeof prompt === 'string' ? prompt.length : 0,
+      outputChars: typeof out === 'string' ? out.length : 0,
+      estPromptTokens: estimateTextTokens(prompt),
+      estOutputTokens: estimateTextTokens(out),
+    })
+    return out
   } catch (err) {
     const msg = err?.message ? err.message : String(err)
     const name = err?.name ? String(err.name) : ''
@@ -594,6 +604,8 @@ export async function generatePlantScan({
       mimeType: mimeType || 'unknown',
       imageByteLength,
       customPrompt: Boolean(prompt),
+      estImagePayloadTokens: estimateBase64PayloadTokens(imageBase64),
+      estPromptTokens: estimateTextTokens(prompt || ''),
     },
     { correlationId }
   )

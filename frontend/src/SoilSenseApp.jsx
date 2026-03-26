@@ -1,6 +1,6 @@
 import './App.css'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { BadgeCheck, BookOpen, Leaf, TreePine, Camera, Sun, Droplet, Map } from 'lucide-react'
+import { BadgeCheck, BookOpen, Leaf, TreePine, Camera, Sun, Droplet, Map, Loader2 } from 'lucide-react'
 import {
   generateKnowledgeHub,
   generateFarmDailyInsight,
@@ -673,7 +673,8 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
   const [hubStatus, setHubStatus] = useState('idle') // idle|loading|success|error
   const [hubError, setHubError] = useState('')
   const [knowledgeHub, setKnowledgeHub] = useState(null)
-  const didRequestHubRef = useRef(false)
+  /** Last language we successfully loaded; `null` means retry is allowed for the current `lang`. */
+  const hubLoadedLangRef = useRef(null)
 
   // Soil advice card (Gemini).
   const [aiStatus, setAiStatus] = useState('idle') // idle|loading|success|error
@@ -2395,20 +2396,33 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     return () => clearInterval(id)
   }, [activeTab, geoStatus, coords, refreshSmartWeatherSignalsOnly, SMART_WEATHER_REFRESH_MS])
 
-  // Knowledge Hub: generate once when we first open the Guide tab.
+  // Knowledge Hub: load when opening Guide or when `lang` changes; skip if we already have data for this language.
   useEffect(() => {
     if (activeTab !== 'guide') return
-    if (didRequestHubRef.current) return
+    if (hubLoadedLangRef.current === lang) return
 
-    didRequestHubRef.current = true
     setHubStatus('loading')
     setHubError('')
     setKnowledgeHub(null)
 
+    let cancelled = false
     ;(async () => {
       const correlationId = generateRunId()
       try {
         const hub = await generateKnowledgeHub({ lang, correlationId })
+        if (cancelled) return
+        if (!hub || typeof hub !== 'object') {
+          throw new Error('Knowledge Hub response was empty.')
+        }
+        if (hub?.parseError) {
+          const rawPreview =
+            typeof hub?.rawText === 'string' && hub.rawText.trim() ? `\n\nRaw:\n${hub.rawText.slice(0, 2000)}` : ''
+          throw new Error(`Couldn't parse Knowledge Hub JSON.${rawPreview}`)
+        }
+        if (!Array.isArray(hub?.categories) || hub.categories.length === 0) {
+          throw new Error('Knowledge Hub categories unavailable.')
+        }
+        hubLoadedLangRef.current = lang
         setKnowledgeHub(hub)
         setHubStatus('success')
         const categories = Array.isArray(hub?.categories) ? hub.categories : []
@@ -2421,43 +2435,19 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
           { correlationId }
         )
       } catch (err) {
+        if (cancelled) return
+        hubLoadedLangRef.current = null
         setHubStatus('error')
         setHubError(err?.message ? err.message : String(err))
       }
     })()
+    return () => {
+      cancelled = true
+      // If the user leaves Guide (or `lang` changes) while a fetch is in flight, the async
+      // handler bails out without updating state — avoid leaving the card stuck on "loading".
+      setHubStatus((s) => (s === 'loading' ? 'idle' : s))
+    }
   }, [activeTab, lang])
-
-  // Knowledge Hub: refresh when language changes while staying on the Guide tab.
-  useEffect(() => {
-    if (activeTab !== 'guide') return
-    if (!didRequestHubRef.current) return
-    if (hubStatus === 'loading') return
-
-    setHubStatus('loading')
-    setHubError('')
-    setKnowledgeHub(null)
-
-    ;(async () => {
-      const correlationId = generateRunId()
-      try {
-        const hub = await generateKnowledgeHub({ lang, correlationId })
-        setKnowledgeHub(hub)
-        setHubStatus('success')
-        const categories = Array.isArray(hub?.categories) ? hub.categories : []
-        uiLog.info(
-          'ui.knowledgeHub.categoriesLoaded',
-          {
-            categoryCount: categories.length,
-            names: categories.map((c) => c?.name).filter(Boolean),
-          },
-          { correlationId }
-        )
-      } catch (err) {
-        setHubStatus('error')
-        setHubError(err?.message ? err.message : String(err))
-      }
-    })()
-  }, [lang, activeTab, hubStatus])
 
   return (
     <div className="app-shell">
@@ -3199,11 +3189,19 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
                 </div>
                 <div className="card-body">
                   {hubStatus === 'idle' || hubStatus === 'loading' ? (
-                    <p className="muted">
-                      {hubStatus === 'loading'
-                        ? t('common.generatingKnowledgeHub')
-                        : t('common.loadingKnowledgeHub')}
-                    </p>
+                    <div className="knowledge-hub-loading" aria-busy="true">
+                      <Loader2 className="knowledge-hub-loading-icon" size={28} strokeWidth={2.2} aria-hidden />
+                      <div className="knowledge-hub-loading-skeleton" aria-hidden>
+                        <div className="knowledge-hub-skel-line knowledge-hub-skel-line--long" />
+                        <div className="knowledge-hub-skel-line knowledge-hub-skel-line--mid" />
+                        <div className="knowledge-hub-skel-line knowledge-hub-skel-line--short" />
+                      </div>
+                      <p className="knowledge-hub-loading-text muted">
+                        {hubStatus === 'loading'
+                          ? t('common.generatingKnowledgeHub')
+                          : t('common.loadingKnowledgeHub')}
+                      </p>
+                    </div>
                   ) : null}
 
                   {hubStatus === 'error' ? (
@@ -3217,15 +3215,22 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
                     <div className="knowledge-hub">
                       {Array.isArray(knowledgeHub.categories) && knowledgeHub.categories.length ? (
                         <div className="knowledge-grid">
-                          {knowledgeHub.categories.map((c) => (
-                            <div key={c.name} className="knowledge-category">
-                              <p className="knowledge-category-title">{c.name}</p>
-                              {c.summary ? <p className="muted knowledge-summary">{c.summary}</p> : null}
-                              {Array.isArray(c.bullets) && c.bullets.length ? (
+                          {knowledgeHub.categories.map((c, catIdx) => (
+                            <div key={`${catIdx}:${typeof c?.name === 'string' ? c.name : ''}`} className="knowledge-category">
+                              {typeof c?.name === 'string' && c.name.trim() ? (
+                                <p className="knowledge-category-title">{c.name}</p>
+                              ) : null}
+                              {typeof c?.summary === 'string' && c.summary.trim() ? (
+                                <p className="muted knowledge-summary">{c.summary}</p>
+                              ) : null}
+                              {Array.isArray(c?.bullets) && c.bullets.length ? (
                                 <ul className="knowledge-bullets">
-                                  {c.bullets.map((b, idx) => (
-                                    <li key={idx}>{b}</li>
-                                  ))}
+                                  {c.bullets
+                                    .map((b) => (typeof b === 'string' ? b.trim() : ''))
+                                    .filter(Boolean)
+                                    .map((b, idx) => (
+                                      <li key={idx}>{b}</li>
+                                    ))}
                                 </ul>
                               ) : null}
                             </div>

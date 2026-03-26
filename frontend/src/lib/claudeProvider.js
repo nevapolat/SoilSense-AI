@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { createLogger, normalizeErrorForLog } from './logger'
 import { extractJson } from './llmJson.js'
+import { estimateTextTokens, estimateBase64PayloadTokens } from './tokenEstimate.js'
 import {
   REG_AGRI_EXPERT_PERSONA,
   buildJsonTaskLanguageConstraint,
@@ -11,11 +12,25 @@ import {
 
 // Snapshot IDs like claude-3-5-sonnet-20241022 may be retired; use a current ID (see Anthropic models docs).
 const DEFAULT_MODEL = 'claude-sonnet-4-20250514'
+const DEFAULT_HAIKU_MODEL = 'claude-haiku-4-5-20251001'
 
 const claudeLog = createLogger('claude')
 
 export function getResolvedClaudeModelName() {
   return import.meta.env.VITE_CLAUDE_MODEL?.toString() || DEFAULT_MODEL
+}
+
+export function getResolvedClaudeHaikuModelName() {
+  return import.meta.env.VITE_CLAUDE_HAIKU_MODEL?.toString() || DEFAULT_HAIKU_MODEL
+}
+
+function resolveClaudeModelForFeature(feature) {
+  const raw = import.meta.env.VITE_CLAUDE_HAIKU_FEATURES
+  const features = typeof raw === 'string' ? raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean) : []
+  if (!features.length) return getResolvedClaudeModelName()
+  const f = typeof feature === 'string' ? feature.trim().toLowerCase() : ''
+  if (!f) return getResolvedClaudeModelName()
+  return features.includes(f) ? getResolvedClaudeHaikuModelName() : getResolvedClaudeModelName()
 }
 
 const RUNTIME_API_KEY_STORAGE = 'soilsense.runtimeAnthropicApiKey'
@@ -79,22 +94,34 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function generateClaudeText(prompt, { apiKeyOverride } = {}) {
+async function generateClaudeText(prompt, { apiKeyOverride, modelOverride } = {}) {
   const client = new Anthropic({
     apiKey: requireAnthropicKey(apiKeyOverride),
     dangerouslyAllowBrowser: true,
   })
+
+  const modelName =
+    typeof modelOverride === 'string' && modelOverride.trim() ? modelOverride.trim() : getResolvedClaudeModelName()
 
   const maxAttempts = 3
   let lastErr = null
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       const msg = await client.messages.create({
-        model: getResolvedClaudeModelName(),
+        model: modelName,
         max_tokens: 8192,
         messages: [{ role: 'user', content: prompt }],
       })
-      return textFromMessage(msg)
+      const out = textFromMessage(msg)
+      claudeLog.info('claude.tokens.estimate', {
+        kind: 'text',
+        model: modelName,
+        promptChars: typeof prompt === 'string' ? prompt.length : 0,
+        outputChars: typeof out === 'string' ? out.length : 0,
+        estPromptTokens: estimateTextTokens(prompt),
+        estOutputTokens: estimateTextTokens(out),
+      })
+      return out
     } catch (err) {
       lastErr = err
       const msg = err?.message ? err.message : String(err)
@@ -361,7 +388,7 @@ Formatting rules:
 // Task 6: Knowledge Hub (permanent categories).
 export async function generateKnowledgeHub({ lang, correlationId } = {}) {
   const t0 = performance.now()
-  const model = getResolvedClaudeModelName()
+  const model = resolveClaudeModelForFeature('knowledgeHub')
   claudeLog.info('claude.knowledgeHub.start', { model }, { correlationId })
   const prompt = `You are a Regenerative Agriculture Expert.
 ${buildLanguageInstruction(lang)}
@@ -400,7 +427,7 @@ Notes:
 - Keep bullets concise and action-oriented.`
 
   try {
-    const text = await generateClaudeText(prompt)
+    const text = await generateClaudeText(prompt, { modelOverride: model })
     const json = extractJson(text)
     if (json) {
       const categories = Array.isArray(json?.categories) ? json.categories : []
@@ -440,7 +467,7 @@ export async function generateSmartAlert({
   correlationId,
 } = {}) {
   const t0 = performance.now()
-  const model = getResolvedClaudeModelName()
+  const model = resolveClaudeModelForFeature('smartAlert')
   claudeLog.info('claude.smartAlert.start', { model }, { correlationId })
   const locationLine = formatCoords(latitude, longitude)
 
@@ -485,7 +512,8 @@ Formatting rules:
   const combined = { weatherSummary, next48hHourly }
   try {
     const text = await generateClaudeText(
-      prompt + `\n\n(For reference, JSON blob):\n${JSON.stringify(combined)}`
+      `${prompt}\n\n(For reference, JSON blob):\n${JSON.stringify(combined)}`,
+      { modelOverride: model }
     )
     const json = extractJson(text)
     if (json) {
@@ -601,6 +629,8 @@ export async function generatePlantScan({
       mimeType: mimeType || 'unknown',
       imageByteLength,
       customPrompt: Boolean(prompt),
+      estImagePayloadTokens: estimateBase64PayloadTokens(imageBase64),
+      estPromptTokens: estimateTextTokens(prompt || ''),
     },
     { correlationId }
   )
@@ -707,7 +737,7 @@ export async function generateDailyTasks({
   preferredCropsSummary,
 } = {}) {
   const t0 = performance.now()
-  const model = getResolvedClaudeModelName()
+  const model = resolveClaudeModelForFeature('dailyTasks')
   claudeLog.info(
     'claude.dailyTasks.start',
     { model, soilHealthScore },
@@ -787,7 +817,7 @@ Rules:
 ${buildJsonTaskLanguageConstraint(lang)}`
 
   try {
-    const text = await generateClaudeText(prompt)
+    const text = await generateClaudeText(prompt, { modelOverride: model })
     const json = extractJson(text)
     const tasks = Array.isArray(json?.tasks) ? json.tasks : []
     if (json) {
