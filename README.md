@@ -8,7 +8,6 @@ SoilSense AI helps growers make regenerative farming decisions with AI-powered r
 
 ## Canli Demo
 Yayin Linki: https://soilsensee.netlify.app/
-Demo Video: Eklenecek (YouTube/Loom linki hazir oldugunda guncellenecek)
 
 ## Kullanilan Teknolojiler
 - React.js (Vite)
@@ -22,6 +21,7 @@ Demo Video: Eklenecek (YouTube/Loom linki hazir oldugunda guncellenecek)
 - `idea.md`
 - `user-flow.md`
 - `tech-stack.md`
+- `yayin-linki.md`
 - `features/`
 - `agents/` (bonus)
 - `assets/` (bonus)
