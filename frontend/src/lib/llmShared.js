@@ -132,3 +132,105 @@ export function buildSoilVitalityScoreFallback(signals, lang) {
 
   return { soilHealthScore: score, explanation }
 }
+
+function pickWeatherSignalsForKnowledgeHub(signals) {
+  if (!signals || typeof signals !== 'object') return null
+  const s = signals
+  const out = {}
+  if (typeof s.tempNowC === 'number' && Number.isFinite(s.tempNowC)) out.tempNowC = s.tempNowC
+  if (typeof s.humidityNowPct === 'number' && Number.isFinite(s.humidityNowPct)) out.humidityNowPct = s.humidityNowPct
+  if (typeof s.precipitationSumMm === 'number' && Number.isFinite(s.precipitationSumMm)) out.precipitationSumMm = s.precipitationSumMm
+  if (typeof s.next48hMinTempC === 'number' && Number.isFinite(s.next48hMinTempC)) out.next48hMinTempC = s.next48hMinTempC
+  if (typeof s.firstBelow2CInHours === 'number' && Number.isFinite(s.firstBelow2CInHours)) {
+    out.firstBelow2CInHours = s.firstBelow2CInHours
+  }
+  if (typeof s.humidityBucket === 'string') out.humidityBucket = s.humidityBucket
+  if (typeof s.sunBucket === 'string') out.sunBucket = s.sunBucket
+  return Object.keys(out).length ? out : null
+}
+
+/**
+ * Structured, non-secret context for Knowledge Hub personalization (Guide tab).
+ */
+export function buildKnowledgeHubContextPayload({
+  profile,
+  coords,
+  activityImpact,
+  weatherSignals,
+  climateZoneHint,
+  locationIntel,
+} = {}) {
+  const equipment = profile?.equipment || {}
+  const customEq = Array.isArray(equipment.custom) ? equipment.custom : []
+  const currentCrops = Array.isArray(profile?.currentCrops) ? profile.currentCrops : []
+  const customCrops = Array.isArray(profile?.customCrops) ? profile.customCrops : []
+
+  let intel = null
+  if (locationIntel && typeof locationIntel === 'object' && !locationIntel.parseError) {
+    const regional =
+      typeof locationIntel.regionalSummary === 'string' ? locationIntel.regionalSummary.trim().slice(0, 500) : ''
+    const gsc = Array.isArray(locationIntel.generalSoilCharacteristics)
+      ? locationIntel.generalSoilCharacteristics.map((x) => String(x).trim()).filter(Boolean).slice(0, 5)
+      : []
+    const cs = Array.isArray(locationIntel.cropSuitability)
+      ? locationIntel.cropSuitability.map((x) => String(x).trim()).filter(Boolean).slice(0, 10)
+      : []
+    intel = {
+      climateZone: typeof locationIntel.climateZone === 'string' ? locationIntel.climateZone.trim() : null,
+      regionalSummary: regional || null,
+      generalSoilCharacteristics: gsc.length ? gsc : null,
+      cropSuitability: cs.length ? cs : null,
+    }
+    if (!intel.climateZone && !intel.regionalSummary && !intel.generalSoilCharacteristics && !intel.cropSuitability) {
+      intel = null
+    }
+  }
+
+  return {
+    farmProfile: {
+      soilType: typeof profile?.soilType === 'string' ? profile.soilType : 'unknown',
+      address: typeof profile?.address === 'string' ? profile.address.trim().slice(0, 220) : '',
+      fieldSize:
+        typeof profile?.fieldSize?.value === 'number' && Number.isFinite(profile.fieldSize.value)
+          ? { value: profile.fieldSize.value, unit: profile.fieldSize.unit === 'sqm' ? 'sqm' : 'ha' }
+          : null,
+      workforce: typeof profile?.workforce === 'number' && Number.isFinite(profile.workforce) ? profile.workforce : null,
+      equipment: {
+        shovel: Boolean(equipment.shovel),
+        tractor: Boolean(equipment.tractor),
+        sprinkler: Boolean(equipment.sprinkler),
+        dripIrrigation: Boolean(equipment.dripIrrigation),
+        custom: customEq.slice(0, 16).map((x) => String(x).trim()).filter(Boolean),
+      },
+      crops: [...currentCrops.map(String), ...customCrops.map(String)].filter(Boolean).slice(0, 28),
+    },
+    location: {
+      coordinates:
+        coords && typeof coords.latitude === 'number' && typeof coords.longitude === 'number'
+          ? { latitude: coords.latitude, longitude: coords.longitude }
+          : null,
+      climateZoneHint: typeof climateZoneHint === 'string' && climateZoneHint.trim() ? climateZoneHint.trim() : null,
+      environmentalIntel: intel,
+    },
+    recentActivitySummary: activityImpact
+      ? {
+          organicMatterKgApprox:
+            typeof activityImpact.organicKg === 'number' && Number.isFinite(activityImpact.organicKg)
+              ? Math.round(activityImpact.organicKg * 10) / 10
+              : 0,
+          chemicalPesticideLitersApprox:
+            typeof activityImpact.chemicalPesticideLiters === 'number' &&
+            Number.isFinite(activityImpact.chemicalPesticideLiters)
+              ? Math.round(activityImpact.chemicalPesticideLiters * 100) / 100
+              : 0,
+          chemicalFertilizerKgApprox:
+            typeof activityImpact.chemicalFertilizerKg === 'number' && Number.isFinite(activityImpact.chemicalFertilizerKg)
+              ? Math.round(activityImpact.chemicalFertilizerKg * 10) / 10
+              : 0,
+          compostRecentlyAdded: Boolean(activityImpact.compostRecentlyAdded),
+          chemicalRecentlyApplied: Boolean(activityImpact.chemicalRecentlyApplied),
+        }
+      : null,
+    weatherSignalsToday: pickWeatherSignalsForKnowledgeHub(weatherSignals),
+  }
+}

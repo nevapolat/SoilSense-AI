@@ -9,6 +9,9 @@ const AUTH_RESET_KEY = 'soilsense.auth.reset.v1'
 const DEVICE_ID_KEY = 'soilsense.auth.deviceId.v1'
 const AUTH_REMEMBERED_EMAIL_KEY = 'soilsense.auth.rememberedEmail.v1'
 const AUTH_REMEMBERED_PASSWORD_KEY = 'soilsense.auth.rememberedPassword.v1'
+const AUTH_REMEMBER_ME_PREF_KEY = 'soilsense.auth.rememberMePreference.v1'
+const AUTH_KNOWN_ACCOUNTS_KEY = 'soilsense.auth.knownAccounts.v1'
+const MAX_KNOWN_ACCOUNTS = 24
 
 /** When using Supabase, the active user row is kept here and synced to `user_profiles`. */
 let remoteUserCache = null
@@ -17,27 +20,39 @@ export function clearRemoteUserCache() {
   remoteUserCache = null
 }
 
-/** Captured at module load before installScopedLocalStorage() replaces localStorage methods. */
+/**
+ * Auth keys must use Storage.prototype on localStorage so reads/writes always hit the real keys.
+ * installScopedLocalStorage() replaces window.localStorage methods; bound "native" getters can
+ * accidentally use those wrappers after the patch is installed.
+ */
 const W = typeof window !== 'undefined' ? window : null
-const nativeLocalGet = W?.localStorage?.getItem?.bind(W.localStorage)
-const nativeLocalSet = W?.localStorage?.setItem?.bind(W.localStorage)
-const nativeLocalRemove = W?.localStorage?.removeItem?.bind(W.localStorage)
 const nativeSessionGet = W?.sessionStorage?.getItem?.bind(W.sessionStorage)
 const nativeSessionSet = W?.sessionStorage?.setItem?.bind(W.sessionStorage)
 const nativeSessionRemove = W?.sessionStorage?.removeItem?.bind(W.sessionStorage)
 
 function authLocalGet(key) {
-  if (nativeLocalGet) return nativeLocalGet(key)
-  if (!W?.localStorage) return null
-  return Storage.prototype.getItem.call(W.localStorage, key)
+  try {
+    if (!W?.localStorage) return null
+    return Storage.prototype.getItem.call(W.localStorage, key)
+  } catch {
+    return null
+  }
 }
 function authLocalSet(key, value) {
-  if (nativeLocalSet) nativeLocalSet(key, value)
-  else if (W?.localStorage) Storage.prototype.setItem.call(W.localStorage, key, value)
+  try {
+    if (!W?.localStorage) return
+    Storage.prototype.setItem.call(W.localStorage, key, value)
+  } catch {
+    // ignore (quota, private mode)
+  }
 }
 function authLocalRemove(key) {
-  if (nativeLocalRemove) nativeLocalRemove(key)
-  else if (W?.localStorage) Storage.prototype.removeItem.call(W.localStorage, key)
+  try {
+    if (!W?.localStorage) return
+    Storage.prototype.removeItem.call(W.localStorage, key)
+  } catch {
+    // ignore
+  }
 }
 function authSessionGet(key) {
   if (nativeSessionGet) return nativeSessionGet(key)
@@ -140,6 +155,8 @@ async function signUpRemote({ email: normalizedEmail, password, rememberMe }) {
   if (error) throw new Error(error.message)
   const uid = data.user?.id
   if (!uid) throw new Error('Sign up failed.')
+  // Always record email for this device (Supabase often returns no session until email is confirmed).
+  rememberAccountEmail(normalizedEmail)
   if (!data.session) {
     throw new Error('Check your email to confirm your account, then sign in here.')
   }
@@ -226,6 +243,7 @@ export async function hydrateRemoteSessionAfterAuth() {
     createdAt: new Date().toISOString(),
   }
   persistSession(s)
+  rememberAccountEmail(session.user.email || user.email || '')
   return s
 }
 
@@ -262,6 +280,7 @@ export async function bootstrapAuth() {
     await upsertRemoteProfile(user)
   }
   remoteUserCache = { userId: uid, user }
+  rememberAccountEmail(session.user.email || user.email || '')
   return {
     session: {
       userId: uid,
@@ -325,6 +344,80 @@ export function getRememberedEmail() {
   }
 }
 
+/** Last explicit "Remember me" choice for the login form (defaults to on when unset). */
+export function getRememberMePreference() {
+  try {
+    const raw = authLocalGet(AUTH_REMEMBER_ME_PREF_KEY)
+    if (raw === '0') return false
+    if (raw === '1') return true
+  } catch {
+    // ignore
+  }
+  return true
+}
+
+export function setRememberMePreference(on) {
+  try {
+    authLocalSet(AUTH_REMEMBER_ME_PREF_KEY, on ? '1' : '0')
+  } catch {
+    // ignore
+  }
+}
+
+function readKnownAccountsFromStorage() {
+  try {
+    const raw = authLocalGet(AUTH_KNOWN_ACCOUNTS_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    const out = []
+    for (const item of parsed) {
+      const e = typeof item === 'string' ? item : item?.email
+      const n = normalizeEmail(e || '')
+      if (n.includes('@')) out.push(n)
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+function rememberAccountEmail(email) {
+  const normalized = normalizeEmail(email)
+  if (!normalized.includes('@')) return
+  const prev = readKnownAccountsFromStorage()
+  const next = [normalized, ...prev.filter((e) => e !== normalized)].slice(0, MAX_KNOWN_ACCOUNTS)
+  try {
+    authLocalSet(AUTH_KNOWN_ACCOUNTS_KEY, JSON.stringify(next))
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Emails for accounts used or created on this device (login/sign-up + local account DB). No passwords stored.
+ */
+export function getKnownAccountEmails() {
+  const seen = new Set()
+  const out = []
+  function add(addr) {
+    const v = normalizeEmail(addr || '')
+    if (!v.includes('@') || seen.has(v)) return
+    seen.add(v)
+    out.push(v)
+  }
+  for (const e of readKnownAccountsFromStorage()) add(e)
+  if (!isRemoteAuth()) {
+    try {
+      const db = loadDb()
+      for (const u of db.users || []) add(u.email)
+    } catch {
+      // ignore
+    }
+  }
+  return out
+}
+
 function parseAuthDbPayload(raw) {
   if (!raw || typeof raw !== 'string') return null
   try {
@@ -380,7 +473,7 @@ function loadLocalUsersMerged() {
       const looksLikeAuthDb =
         k.endsWith(AUTH_DB_KEY) || k.includes('soilsense.auth.db') || /soilsense[^.]*auth\.db/.test(k)
       if (!looksLikeAuthDb) continue
-      ingestFromRaw(nativeLocalGet ? nativeLocalGet(k) : authLocalGet(k))
+      ingestFromRaw(authLocalGet(k))
     }
   } catch {
     // ignore
@@ -488,44 +581,46 @@ export async function signUpWithEmail({ email, password, rememberMe }) {
   if (!normalizedEmail.includes('@')) throw new Error('Invalid email address.')
   if (String(password || '').length < 8) throw new Error('Password must be at least 8 characters.')
 
+  let session
   if (isRemoteAuth()) {
-    return signUpRemote({ email: normalizedEmail, password, rememberMe })
-  }
-
-  const db = loadDb()
-  if (getUserByEmail(db, normalizedEmail)) {
-    throw new Error('Account already exists for this email.')
-  }
-
-  const passwordRecord = await buildPasswordRecord(password)
-  const deviceId = getDeviceId()
-  const user = {
-    id: makeId('usr'),
-    email: normalizedEmail,
-    password: passwordRecord,
-    hasCompletedTour: false,
-    hasSeenProjectIntro: false,
-    activeFieldId: null,
-    fields: [],
-    trustedDeviceIds: rememberMe ? [deviceId] : [],
-    createdAt: new Date().toISOString(),
-  }
-  db.users.push(user)
-  saveDb(db)
-
-  const session = {
-    userId: user.id,
-    rememberMe: Boolean(rememberMe),
-    createdAt: new Date().toISOString(),
-  }
-  persistSession(session)
-  if (rememberMe) {
-    setRememberedEmail(normalizedEmail)
-    setRememberedPassword(password)
+    session = await signUpRemote({ email: normalizedEmail, password, rememberMe })
   } else {
-    clearRememberedEmail()
-    clearRememberedPassword()
+    const db = loadDb()
+    if (getUserByEmail(db, normalizedEmail)) {
+      throw new Error('Account already exists for this email.')
+    }
+
+    const passwordRecord = await buildPasswordRecord(password)
+    const deviceId = getDeviceId()
+    const user = {
+      id: makeId('usr'),
+      email: normalizedEmail,
+      password: passwordRecord,
+      hasCompletedTour: false,
+      hasSeenProjectIntro: false,
+      activeFieldId: null,
+      fields: [],
+      trustedDeviceIds: rememberMe ? [deviceId] : [],
+      createdAt: new Date().toISOString(),
+    }
+    db.users.push(user)
+    saveDb(db)
+
+    session = {
+      userId: user.id,
+      rememberMe: Boolean(rememberMe),
+      createdAt: new Date().toISOString(),
+    }
+    persistSession(session)
+    if (rememberMe) {
+      setRememberedEmail(normalizedEmail)
+      setRememberedPassword(password)
+    } else {
+      clearRememberedEmail()
+      clearRememberedPassword()
+    }
   }
+  rememberAccountEmail(normalizedEmail)
   return session
 }
 
@@ -533,46 +628,49 @@ export async function loginWithEmail({ email, password, rememberMe }) {
   const normalizedEmail = normalizeEmail(email) || (rememberMe ? getRememberedEmail() : '')
   if (!normalizedEmail) throw new Error('Email is required.')
 
+  let session
   if (isRemoteAuth()) {
-    return loginRemote({ email, password, rememberMe })
-  }
-
-  const db = loadDb()
-  const user = getUserByEmail(db, normalizedEmail)
-  if (!user) throw new Error('No account found for this email.')
-  const deviceId = getDeviceId()
-  const trusted = Array.isArray(user.trustedDeviceIds) && user.trustedDeviceIds.includes(deviceId)
-  const needsPassword = !rememberMe || !trusted
-  const passwordCandidate = String(password || '') || (rememberMe ? getRememberedPassword() : '')
-  if (needsPassword) {
-    if (!String(passwordCandidate || '')) {
-      throw new Error('Password is required for this device.')
-    }
-    const ok = await verifyPassword(passwordCandidate, user.password)
-    if (!ok) throw new Error('Invalid email or password.')
-    // Migrate legacy plain-text password record on successful login.
-    if (typeof user.password === 'string') {
-      user.password = await buildPasswordRecord(passwordCandidate)
-    }
-    if (rememberMe) {
-      user.trustedDeviceIds = Array.isArray(user.trustedDeviceIds) ? user.trustedDeviceIds : []
-      if (!user.trustedDeviceIds.includes(deviceId)) user.trustedDeviceIds.push(deviceId)
-    }
-    saveDb(db)
-  }
-  const session = {
-    userId: user.id,
-    rememberMe: Boolean(rememberMe),
-    createdAt: new Date().toISOString(),
-  }
-  persistSession(session)
-  if (rememberMe) {
-    setRememberedEmail(normalizedEmail)
-    if (passwordCandidate) setRememberedPassword(passwordCandidate)
+    session = await loginRemote({ email, password, rememberMe })
   } else {
-    clearRememberedEmail()
-    clearRememberedPassword()
+    const db = loadDb()
+    const user = getUserByEmail(db, normalizedEmail)
+    if (!user) throw new Error('No account found for this email.')
+    const deviceId = getDeviceId()
+    const trusted = Array.isArray(user.trustedDeviceIds) && user.trustedDeviceIds.includes(deviceId)
+    const needsPassword = !rememberMe || !trusted
+    const passwordCandidate = String(password || '') || (rememberMe ? getRememberedPassword() : '')
+    if (needsPassword) {
+      if (!String(passwordCandidate || '')) {
+        throw new Error('Password is required for this device.')
+      }
+      const ok = await verifyPassword(passwordCandidate, user.password)
+      if (!ok) throw new Error('Invalid email or password.')
+      // Migrate legacy plain-text password record on successful login.
+      if (typeof user.password === 'string') {
+        user.password = await buildPasswordRecord(passwordCandidate)
+      }
+      if (rememberMe) {
+        user.trustedDeviceIds = Array.isArray(user.trustedDeviceIds) ? user.trustedDeviceIds : []
+        if (!user.trustedDeviceIds.includes(deviceId)) user.trustedDeviceIds.push(deviceId)
+      }
+      saveDb(db)
+    }
+    session = {
+      userId: user.id,
+      rememberMe: Boolean(rememberMe),
+      createdAt: new Date().toISOString(),
+    }
+    persistSession(session)
+    if (rememberMe) {
+      setRememberedEmail(normalizedEmail)
+      if (passwordCandidate) setRememberedPassword(passwordCandidate)
+    } else {
+      clearRememberedEmail()
+      clearRememberedPassword()
+    }
   }
+  rememberAccountEmail(normalizedEmail)
+  setRememberMePreference(Boolean(rememberMe))
   return session
 }
 
@@ -622,9 +720,6 @@ export async function logoutSession() {
   }
   authLocalRemove(AUTH_SESSION_KEY)
   authSessionRemove(AUTH_SESSION_KEY)
-  // Remember-me is for the login form only; clear it so logout always lands on a fresh login (no auto-login).
-  clearRememberedEmail()
-  clearRememberedPassword()
 }
 
 export function listUserFields(userId) {

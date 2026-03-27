@@ -31,6 +31,7 @@ import {
   hasUserGrowSelections,
   normalizeCustomGrowLabels,
 } from './lib/fieldPlanner'
+import { buildKnowledgeHubContextPayload } from './lib/llmShared'
 import { geocodeFieldAddress, coordinatesIndicateWater } from './lib/geocoding'
 import {
   fieldAreaHectares,
@@ -99,12 +100,40 @@ function computeDailyTasksScoreImpact(tasks, completedIds) {
 // This compresses the weather-driven base so places like Istanbul/Kağıthane
 // (humid + rainy) don’t automatically produce unrealistically high soil health.
 function capWeatherDrivenSoilHealthScore(rawScore) {
-  if (typeof rawScore !== 'number' || !Number.isFinite(rawScore)) return rawScore
+  if (typeof rawScore !== 'number') return rawScore
+  // JSON may deserialize invalid numbers; never propagate NaN/Infinity into the UI.
+  if (!Number.isFinite(rawScore)) return 55
   const x = Math.max(0, Math.min(100, rawScore))
   // Maps raw score -> conservative ceiling.
   // Example: raw 72 -> cap ~56; raw 85 -> cap ~59; raw 100 -> cap ~63.
   const capped = 50 + (x - 50) * 0.25
   return Math.max(0, Math.min(100, Math.round(capped)))
+}
+
+function parseNumericSoilScore(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const n = Number(String(value).trim().replace(',', '.'))
+    if (Number.isFinite(n)) return n
+  }
+  return null
+}
+
+/** Weather-only score from LLM JSON or deterministic fallback when parse fails or score is missing/invalid. */
+function resolveVitalityWeatherScore(vitalityJson, signals, lang) {
+  const fallback = buildSoilVitalityScoreFallback(signals, lang)
+  if (!vitalityJson || vitalityJson.parseError) {
+    return { soilHealthScore: fallback.soilHealthScore, explanation: fallback.explanation, usedFallback: true }
+  }
+  const n = parseNumericSoilScore(vitalityJson.soilHealthScore)
+  if (n != null) {
+    return {
+      soilHealthScore: n,
+      explanation: typeof vitalityJson.explanation === 'string' ? vitalityJson.explanation : '',
+      usedFallback: false,
+    }
+  }
+  return { soilHealthScore: fallback.soilHealthScore, explanation: fallback.explanation, usedFallback: true }
 }
 
 function normalizeCustomEquipmentLabels(input) {
@@ -673,8 +702,8 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
   const [hubStatus, setHubStatus] = useState('idle') // idle|loading|success|error
   const [hubError, setHubError] = useState('')
   const [knowledgeHub, setKnowledgeHub] = useState(null)
-  /** Last language we successfully loaded; `null` means retry is allowed for the current `lang`. */
-  const hubLoadedLangRef = useRef(null)
+  /** Cache key for Knowledge Hub (lang + profile + activity + location + weather); `null` after error allows retry. */
+  const hubLoadedCacheKeyRef = useRef(null)
 
   // Soil advice card (Gemini).
   const [aiStatus, setAiStatus] = useState('idle') // idle|loading|success|error
@@ -793,6 +822,8 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
   const [completedTaskIds, setCompletedTaskIds] = useState([]) // persisted per day
   const dailyTasksGenerationInFlightRef = useRef(false)
   const forceDailyTasksRefreshRef = useRef(false)
+  /** Fresh count for async observers (avoids stale closures when activity log triggers refresh). */
+  const dailyTasksLengthRef = useRef(0)
 
   // Profile + Activity system
   const [profileOpen, setProfileOpen] = useState(false)
@@ -1026,6 +1057,10 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
       setDailyTasksStatus('idle')
     }
   }, [dailyTasksDayKey, lang])
+
+  useEffect(() => {
+    dailyTasksLengthRef.current = Array.isArray(dailyTasks) ? dailyTasks.length : 0
+  }, [dailyTasks])
 
   const prevLangForDailyTasksRef = useRef(null)
   useEffect(() => {
@@ -1299,12 +1334,12 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     if (typeof vitalityBaseScore !== 'number' || !Number.isFinite(vitalityBaseScore)) return
     setVitalityScore(applyActivityImpact(vitalityBaseScore))
     const deltaRounded = Math.round(activityImpact?.soilHealthDelta || 0)
-    if (typeof vitalityBaseExplanation === 'string' && vitalityBaseExplanation.trim().length) {
-      setVitalityExplanation(
-        `${vitalityBaseExplanation}\n\n${t('vitality.activityImpactPrefix')} ${deltaRounded >= 0 ? '+' : ''}${deltaRounded}`
-      )
+    const prefix = `${t('vitality.activityImpactPrefix')} ${deltaRounded >= 0 ? '+' : ''}${deltaRounded}`
+    const base = typeof vitalityBaseExplanation === 'string' ? vitalityBaseExplanation.trim() : ''
+    if (base.length) {
+      setVitalityExplanation(`${base}\n\n${prefix}`)
     } else {
-      setVitalityExplanation('')
+      setVitalityExplanation(prefix)
     }
   }, [vitalityBaseScore, vitalityBaseExplanation, activityImpact, t, applyActivityImpact])
 
@@ -1333,6 +1368,29 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
   const systemRecommendationContextKey = useMemo(() => {
     return `${profileFingerprint}|${activityImpact?.fingerprint || 'na'}`
   }, [profileFingerprint, activityImpact])
+
+  const knowledgeHubContextPayload = useMemo(
+    () =>
+      buildKnowledgeHubContextPayload({
+        profile,
+        coords,
+        activityImpact,
+        weatherSignals: smartWeatherSignals && typeof smartWeatherSignals === 'object' ? smartWeatherSignals : {},
+        climateZoneHint:
+          (typeof locationIntel?.climateZone === 'string' && locationIntel.climateZone.trim()
+            ? locationIntel.climateZone.trim()
+            : deriveClimateZoneHintFromWeatherSignals(
+                smartWeatherSignals && typeof smartWeatherSignals === 'object' ? smartWeatherSignals : {}
+              )) || '',
+        locationIntel,
+      }),
+    [profile, coords, activityImpact, smartWeatherSignals, locationIntel]
+  )
+
+  const knowledgeHubCacheKey = useMemo(
+    () => JSON.stringify({ lang, ctx: knowledgeHubContextPayload }),
+    [lang, knowledgeHubContextPayload]
+  )
 
   // State change observer: when Activity/Profile is saved, we trigger
   // dependent recommendation engines to recalculate immediately.
@@ -1854,7 +1912,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         timestamp: new Date().toISOString(),
         weather: weatherSignals || {},
         soil: {
-          score: typeof vitalityScore === 'number' ? vitalityScore : null,
+          score: Number.isFinite(vitalityScore) ? vitalityScore : null,
           explanation: typeof vitalityExplanation === 'string' ? vitalityExplanation : '',
         },
         userActions: Array.isArray(activityLog) ? activityLog.slice(0, 25) : [],
@@ -1869,7 +1927,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         },
         weatherSignals: weatherSignals || {},
         soilSignals: {
-          soilHealthScore: typeof vitalityScore === 'number' ? vitalityScore : null,
+          soilHealthScore: Number.isFinite(vitalityScore) ? vitalityScore : null,
           explanation: typeof vitalityExplanation === 'string' ? vitalityExplanation : '',
         },
         climatePatterns: {
@@ -1974,37 +2032,10 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         { correlationId }
       )
 
-      if (vitalityJson?.parseError) {
-        const scoreFallback = buildSoilVitalityScoreFallback(signals, lang)
-        const weatherPotential = scoreFallback.soilHealthScore
-        const cappedWeatherPotential = capWeatherDrivenSoilHealthScore(weatherPotential)
-        setVitalityBaseScore(cappedWeatherPotential)
-        setVitalityBaseExplanation(scoreFallback.explanation)
-        setVitalityScore(applyActivityImpact(cappedWeatherPotential))
-        const deltaRounded = Math.round(activityImpact?.soilHealthDelta || 0)
-        setVitalityExplanation(
-          `${scoreFallback.explanation}\n\n${t('vitality.activityImpactPrefix')} ${
-            deltaRounded >= 0 ? '+' : ''
-          }${deltaRounded}`
-        )
-      } else {
-        const score = vitalityJson?.soilHealthScore
-        const explanation = vitalityJson?.explanation
-        if (typeof score === 'number') {
-          const cappedWeatherPotential = capWeatherDrivenSoilHealthScore(score)
-          setVitalityBaseScore(cappedWeatherPotential)
-          setVitalityBaseExplanation(typeof explanation === 'string' ? explanation : '')
-          setVitalityScore(applyActivityImpact(cappedWeatherPotential))
-        }
-        if (typeof explanation === 'string' && explanation.trim()) {
-          const deltaRounded = Math.round(activityImpact?.soilHealthDelta || 0)
-          setVitalityExplanation(
-            `${explanation}\n\n${t('vitality.activityImpactPrefix')} ${
-              deltaRounded >= 0 ? '+' : ''
-            }${deltaRounded}`
-          )
-        }
-      }
+      const vitalityResolved = resolveVitalityWeatherScore(vitalityJson, signals, lang)
+      const cappedWeatherPotential = capWeatherDrivenSoilHealthScore(vitalityResolved.soilHealthScore)
+      setVitalityBaseScore(cappedWeatherPotential)
+      setVitalityBaseExplanation(vitalityResolved.explanation)
       setVitalityStatus('success')
 
       uiLog.info(
@@ -2013,7 +2044,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
           weatherHumidityBucket: signals?.humidityBucket || 'unknown',
           sunBucket: signals?.sunBucket || 'unknown',
           activityImpactDelta: Math.round(activityImpact?.soilHealthDelta || 0),
-          usedGeminiFallback: Boolean(vitalityJson?.parseError),
+          usedGeminiFallback: vitalityResolved.usedFallback,
         },
         { correlationId }
       )
@@ -2032,12 +2063,9 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         setDailyTasksStatus('loading')
         setDailyTasksError('')
 
-        const soilScoreBase =
-          vitalityJson?.parseError
-            ? capWeatherDrivenSoilHealthScore(buildSoilVitalityScoreFallback(signals, lang).soilHealthScore)
-            : capWeatherDrivenSoilHealthScore(vitalityJson?.soilHealthScore)
-        const soilScoreForTasks =
-          typeof soilScoreBase === 'number' ? applyActivityImpact(soilScoreBase) : soilScoreBase
+        const vitalityForTasks = resolveVitalityWeatherScore(vitalityJson, signals, lang)
+        const soilScoreBase = capWeatherDrivenSoilHealthScore(vitalityForTasks.soilHealthScore)
+        const soilScoreForTasks = Number.isFinite(soilScoreBase) ? applyActivityImpact(soilScoreBase) : soilScoreBase
 
         try {
           const dailyJson = await generateDailyTasks({
@@ -2119,13 +2147,6 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
       const cappedWeatherPotential = capWeatherDrivenSoilHealthScore(scoreFallback.soilHealthScore)
       setVitalityBaseScore(cappedWeatherPotential)
       setVitalityBaseExplanation(scoreFallback.explanation)
-      setVitalityScore(applyActivityImpact(cappedWeatherPotential))
-      const deltaRounded = Math.round(activityImpact?.soilHealthDelta || 0)
-      setVitalityExplanation(
-        `${scoreFallback.explanation}\n\n${t('vitality.activityImpactPrefix')} ${
-          deltaRounded >= 0 ? '+' : ''
-        }${deltaRounded}`
-      )
       setVitalityStatus('success')
 
       setVitalityError(err?.message ? err.message : String(err))
@@ -2193,10 +2214,11 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     const signals = smartWeatherSignals && typeof smartWeatherSignals === 'object' ? smartWeatherSignals : {}
 
     // `vitalityScore` already includes activity impact; fall back to a deterministic base score otherwise.
-    const soilScoreForTasks =
-      typeof vitalityScore === 'number'
-        ? vitalityScore
-        : applyActivityImpact(buildSoilVitalityScoreFallback(signals, lang).soilHealthScore)
+    const soilScoreForTasks = Number.isFinite(vitalityScore)
+      ? vitalityScore
+      : applyActivityImpact(
+          capWeatherDrivenSoilHealthScore(buildSoilVitalityScoreFallback(signals, lang).soilHealthScore)
+        )
 
     dailyTasksGenerationInFlightRef.current = true
     setDailyTasksStatus('loading')
@@ -2362,9 +2384,22 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         // Profile edits shouldn't affect the quantitative soil-health score.
         // So we avoid regenerating daily tasks on `profileSaved` (otherwise completion scoring
         // can change because the task list itself may differ).
+        //
+        // Activity log updates (compost, water, etc.) already feed `activityImpact` and scores.
+        // Regenerating AI tasks there sets dailyTasksStatus to loading and can race with an in-flight
+        // generation or leave the card stuck—so skip task regen when we already have today's tasks
+        // or when a generation is already running (the in-flight run will finish).
         const lastPayloadType = lastStateChangePayloadRef.current?.type
-        const skipDailyTasksGeneration = lastPayloadType === 'profileSaved'
-        forceDailyTasksRefreshRef.current = lastPayloadType !== 'profileSaved'
+        const isActivityLogEvent =
+          lastPayloadType === 'activitySaved' ||
+          lastPayloadType === 'activityUpdated' ||
+          lastPayloadType === 'activityDeleted'
+        const hasDailyTasksAlready = dailyTasksLengthRef.current > 0
+        const skipDailyTasksGeneration =
+          lastPayloadType === 'profileSaved' ||
+          (isActivityLogEvent && (hasDailyTasksAlready || dailyTasksGenerationInFlightRef.current))
+        forceDailyTasksRefreshRef.current =
+          !skipDailyTasksGeneration && lastPayloadType !== 'profileSaved'
 
         try {
           const signals = await runSmartAlert({ correlationId, skipDailyTasksGeneration })
@@ -2396,10 +2431,11 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     return () => clearInterval(id)
   }, [activeTab, geoStatus, coords, refreshSmartWeatherSignalsOnly, SMART_WEATHER_REFRESH_MS])
 
-  // Knowledge Hub: load when opening Guide or when `lang` changes; skip if we already have data for this language.
+  // Knowledge Hub: load when opening Guide, or when language / farmer context changes.
+  // `knowledgeHubCacheKey` already fingerprints `lang` + `knowledgeHubContextPayload`.
   useEffect(() => {
     if (activeTab !== 'guide') return
-    if (hubLoadedLangRef.current === lang) return
+    if (hubLoadedCacheKeyRef.current === knowledgeHubCacheKey) return
 
     setHubStatus('loading')
     setHubError('')
@@ -2409,7 +2445,11 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     ;(async () => {
       const correlationId = generateRunId()
       try {
-        const hub = await generateKnowledgeHub({ lang, correlationId })
+        const hub = await generateKnowledgeHub({
+          lang,
+          correlationId,
+          knowledgeHubContext: knowledgeHubContextPayload,
+        })
         if (cancelled) return
         if (!hub || typeof hub !== 'object') {
           throw new Error('Knowledge Hub response was empty.')
@@ -2422,7 +2462,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         if (!Array.isArray(hub?.categories) || hub.categories.length === 0) {
           throw new Error('Knowledge Hub categories unavailable.')
         }
-        hubLoadedLangRef.current = lang
+        hubLoadedCacheKeyRef.current = knowledgeHubCacheKey
         setKnowledgeHub(hub)
         setHubStatus('success')
         const categories = Array.isArray(hub?.categories) ? hub.categories : []
@@ -2436,7 +2476,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         )
       } catch (err) {
         if (cancelled) return
-        hubLoadedLangRef.current = null
+        hubLoadedCacheKeyRef.current = null
         setHubStatus('error')
         setHubError(err?.message ? err.message : String(err))
       }
@@ -2447,7 +2487,8 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
       // handler bails out without updating state — avoid leaving the card stuck on "loading".
       setHubStatus((s) => (s === 'loading' ? 'idle' : s))
     }
-  }, [activeTab, lang])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- knowledgeHubCacheKey encodes lang + farmer context
+  }, [activeTab, knowledgeHubCacheKey])
 
   return (
     <div className="app-shell">

@@ -17,20 +17,75 @@ const DEFAULT_HAIKU_MODEL = 'claude-haiku-4-5-20251001'
 const claudeLog = createLogger('claude')
 
 export function getResolvedClaudeModelName() {
-  return import.meta.env.VITE_CLAUDE_MODEL?.toString() || DEFAULT_MODEL
+  const raw = import.meta.env.VITE_CLAUDE_MODEL
+  const fromEnv = raw != null && String(raw).trim() !== '' ? String(raw).trim() : ''
+  return fromEnv || DEFAULT_MODEL
 }
 
 export function getResolvedClaudeHaikuModelName() {
-  return import.meta.env.VITE_CLAUDE_HAIKU_MODEL?.toString() || DEFAULT_HAIKU_MODEL
+  const raw = import.meta.env.VITE_CLAUDE_HAIKU_MODEL
+  const fromEnv = raw != null && String(raw).trim() !== '' ? String(raw).trim() : ''
+  return fromEnv || DEFAULT_HAIKU_MODEL
+}
+
+/**
+ * Haiku-friendly: structured JSON, short/medium text. Sonnet stays default for vision (plant scan).
+ * Users can override via VITE_CLAUDE_HAIKU_FEATURES (comma list or `none`).
+ */
+const DEFAULT_HAIKU_FEATURES = [
+  'knowledgehub',
+  'smartalert',
+  'dailytasks',
+  'soiladvice',
+  'compostrecipe',
+  'soilvitality',
+  'locationintel',
+  'farmdailyinsight',
+  'apikeytest',
+]
+
+/**
+ * Which logical features route to Haiku (lowercase ids, matching resolveClaudeModelForFeature('knowledgeHub') etc.).
+ * Exported so UI/diagnostics can confirm routing without duplicating env rules.
+ */
+export function getHaikuFeatureListFromEnv() {
+  const raw = import.meta.env.VITE_CLAUDE_HAIKU_FEATURES
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return { features: [...DEFAULT_HAIKU_FEATURES], mode: 'default' }
+  }
+  const t = String(raw).trim().toLowerCase()
+  if (t === 'none' || t === 'off' || t === 'false' || t === '0') {
+    return { features: [], mode: 'disabled' }
+  }
+  const features = String(raw)
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+  return { features, mode: 'explicit' }
+}
+
+/** For diagnostics: primary vs Haiku model IDs and active Haiku feature list. */
+export function getClaudeHaikuRoutingInfo() {
+  const { features, mode } = getHaikuFeatureListFromEnv()
+  return {
+    primaryModel: getResolvedClaudeModelName(),
+    haikuModel: getResolvedClaudeHaikuModelName(),
+    haikuFeatures: features,
+    haikuFeatureMode: mode,
+  }
 }
 
 function resolveClaudeModelForFeature(feature) {
-  const raw = import.meta.env.VITE_CLAUDE_HAIKU_FEATURES
-  const features = typeof raw === 'string' ? raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean) : []
-  if (!features.length) return getResolvedClaudeModelName()
   const f = typeof feature === 'string' ? feature.trim().toLowerCase() : ''
   if (!f) return getResolvedClaudeModelName()
-  return features.includes(f) ? getResolvedClaudeHaikuModelName() : getResolvedClaudeModelName()
+
+  const { features } = getHaikuFeatureListFromEnv()
+  if (!features.length) return getResolvedClaudeModelName()
+
+  const usesHaiku = features.includes(f)
+  const resolved = usesHaiku ? getResolvedClaudeHaikuModelName() : getResolvedClaudeModelName()
+  claudeLog.debug('claude.model.route', { feature: f, resolvedModel: resolved, usesHaiku })
+  return resolved
 }
 
 const RUNTIME_API_KEY_STORAGE = 'soilsense.runtimeAnthropicApiKey'
@@ -164,7 +219,7 @@ export async function generateRegenerativeAdvice({
   soilHealthScore,
 } = {}) {
   const t0 = performance.now()
-  const model = getResolvedClaudeModelName()
+  const model = resolveClaudeModelForFeature('soilAdvice')
   claudeLog.info('claude.soilAdvice.start', { model }, { correlationId })
   const locationLine = formatCoords(location?.latitude, location?.longitude)
   const addressLine = typeof location?.address === 'string' && location.address.trim() ? location.address.trim() : 'unknown'
@@ -290,7 +345,7 @@ Return plain text (no markdown), with these sections:
 Keep it concise, friendly, and actionable. Avoid heavy jargon. Use simple farmer language.`
 
   try {
-    const text = await generateClaudeText(prompt)
+    const text = await generateClaudeText(prompt, { modelOverride: model })
     claudeLog.info(
       'claude.soilAdvice.success',
       { model, textChars: typeof text === 'string' ? text.length : 0 },
@@ -309,7 +364,7 @@ Keep it concise, friendly, and actionable. Avoid heavy jargon. Use simple farmer
 // Task 5: Compost wizard recipe generation.
 export async function generateCompostRecipe(inventoryInput, { lang, correlationId } = {}) {
   const t0 = performance.now()
-  const model = getResolvedClaudeModelName()
+  const model = resolveClaudeModelForFeature('compostRecipe')
   const inventory = normalizeInventory(inventoryInput)
   claudeLog.info(
     'claude.compost.start',
@@ -354,7 +409,7 @@ Formatting rules:
 - "layeringSteps" should be 5 to 10 short steps, each a single string.`
 
   try {
-    const text = await generateClaudeText(prompt)
+    const text = await generateClaudeText(prompt, { modelOverride: model })
     const json = extractJson(text)
     if (json) {
       claudeLog.info(
@@ -386,20 +441,29 @@ Formatting rules:
 }
 
 // Task 6: Knowledge Hub (permanent categories).
-export async function generateKnowledgeHub({ lang, correlationId } = {}) {
+export async function generateKnowledgeHub({ lang, correlationId, knowledgeHubContext } = {}) {
   const t0 = performance.now()
   const model = resolveClaudeModelForFeature('knowledgeHub')
   claudeLog.info('claude.knowledgeHub.start', { model }, { correlationId })
+  const farmerBlock =
+    knowledgeHubContext && typeof knowledgeHubContext === 'object'
+      ? JSON.stringify(knowledgeHubContext, null, 2)
+      : 'Not provided (give broadly applicable regenerative guidance).'
+
   const prompt = `You are a Regenerative Agriculture Expert.
 ${buildLanguageInstruction(lang)}
-Create a permanent Knowledge Hub with exactly these 3 categories:
+
+Farmer context (JSON — use this to personalize summaries and bullets; do not invent private details beyond what is listed; if fields are empty, give broadly useful guidance):
+${farmerBlock}
+
+Create a Knowledge Hub with exactly these 3 categories:
 1) Soil Restoration
 2) Water Conservation
 3) Biodiversity
 
 For each category:
-- Provide a short 1-2 sentence summary.
-- Provide 4-7 permanent bullet points that farmers can apply and revisit.
+- Provide a short 1-2 sentence summary that reflects the farmer's soil type, location/climate hints, crops/equipment, and recent activity when that context is available.
+- Provide 4-7 bullet points. At least 2 bullets per category should explicitly connect to the farmer context (e.g., soil type, climate/water stress, equipment limits, crops listed, recent organic vs chemical use) when context exists; otherwise keep bullets general.
 
 Return ONLY strict JSON (no markdown, no commentary) with this schema:
 {
@@ -423,7 +487,7 @@ Return ONLY strict JSON (no markdown, no commentary) with this schema:
 }
 
 Notes:
-- Bullets should be timeless (not date-specific).
+- Bullets should stay reusable (avoid one-day weather forecasts), but may reference seasonal patterns implied by climate hints.
 - Keep bullets concise and action-oriented.`
 
   try {
@@ -545,7 +609,7 @@ Formatting rules:
 
 export async function generateSoilVitalityScore({ weatherSummary, lang, correlationId } = {}) {
   const t0 = performance.now()
-  const model = getResolvedClaudeModelName()
+  const model = resolveClaudeModelForFeature('soilVitality')
   claudeLog.info('claude.soilVitality.start', { model }, { correlationId })
   const prompt = `You are a Regenerative Agriculture Expert.
 ${buildLanguageInstruction(lang)}
@@ -567,7 +631,7 @@ Return ONLY strict JSON (no markdown, no commentary) with schema:
 Explanation should be 1 sentence, card-friendly, and suitable for a farmer (e.g., "Score is high due to recent rainfall and optimal temperature.").`
 
   try {
-    const text = await generateClaudeText(prompt)
+    const text = await generateClaudeText(prompt, { modelOverride: model })
     const json = extractJson(text)
     if (json) {
       claudeLog.info(
@@ -597,8 +661,10 @@ export async function testClaudeApiKey(apiKey, { correlationId } = {}) {
   const t0 = performance.now()
   claudeLog.info('claude.apiKeyTest.start', { keyLengthChars: apiKey ? String(apiKey).length : 0 }, { correlationId })
   try {
+    const model = resolveClaudeModelForFeature('apiKeyTest')
     const text = await generateClaudeText('Return exactly: OK', {
       apiKeyOverride: apiKey,
+      modelOverride: model,
     })
     const out = String(text).trim()
     claudeLog.info('claude.apiKeyTest.success', { responseChars: out.length }, { correlationId, durationMs: performance.now() - t0 })
@@ -858,7 +924,7 @@ export async function generateLocationEnvironmentalAnalysis({
   correlationId,
 } = {}) {
   const t0 = performance.now()
-  const model = getResolvedClaudeModelName()
+  const model = resolveClaudeModelForFeature('locationIntel')
   claudeLog.info('claude.locationIntel.start', { model }, { correlationId })
   const locationLine = formatCoords(latitude, longitude)
   const prompt = `${REG_AGRI_EXPERT_PERSONA}
@@ -885,7 +951,7 @@ Rules:
 - Keep "cropSuitability" to 4-8 region-appropriate crop names.
 - "regionalSummary" should be 1 short sentence for farmers.`
   try {
-    const text = await generateClaudeText(prompt)
+    const text = await generateClaudeText(prompt, { modelOverride: model })
     const json = extractJson(text)
     if (json) return json
     return { parseError: true, rawText: text }
@@ -910,7 +976,7 @@ export async function generateFarmDailyInsight({
   correlationId,
 } = {}) {
   const t0 = performance.now()
-  const model = getResolvedClaudeModelName()
+  const model = resolveClaudeModelForFeature('farmDailyInsight')
   claudeLog.info('claude.farmDailyInsight.start', { model }, { correlationId })
 
   const locationUsed =
@@ -956,7 +1022,7 @@ Output constraints:
 - Keep values concise and practical for a farmer.`
 
   try {
-    const text = await generateClaudeText(prompt)
+    const text = await generateClaudeText(prompt, { modelOverride: model })
     const json = extractJson(text)
     if (json) return json
     return { parseError: true, rawText: text }

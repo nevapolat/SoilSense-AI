@@ -1,4 +1,4 @@
-import { StrictMode, useCallback, useEffect, useMemo, useState } from 'react'
+import { StrictMode, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import './App.css'
@@ -26,6 +26,9 @@ import {
   restoreSession,
   getRememberedEmail,
   getRememberedPassword,
+  getRememberMePreference,
+  setRememberMePreference,
+  getKnownAccountEmails,
   normalizeEmail,
   setUserActiveField,
   signUpWithEmail,
@@ -151,11 +154,12 @@ function clearScopedFieldStorage(userId, fieldId) {
 function ScopedAppStorage({ userId, fieldId, children }) {
   const [scopeReady, setScopeReady] = useState(false)
 
-  useEffect(() => {
+  // Install the storage scope before paint so the dashboard never flashes empty (null).
+  useLayoutEffect(() => {
     const restore = installScopedLocalStorage(`soilsense.u.${userId}.f.${fieldId}.`)
-    queueMicrotask(() => {
-      setScopeReady(true)
-    })
+    // Must flip after installScopedLocalStorage() so children only read scoped keys.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional two-phase mount for localStorage proxy
+    setScopeReady(true)
     return () => {
       restore()
       setScopeReady(false)
@@ -166,12 +170,11 @@ function ScopedAppStorage({ userId, fieldId, children }) {
 
 function AuthScreen({ onAuthenticated, remoteRecovery }) {
   const { t, lang, changeLanguage, availableLangs, getLanguageNativeLabel } = useI18n()
-  const rememberedEmail = useMemo(() => getRememberedEmail(), [])
-  const rememberedPassword = useMemo(() => getRememberedPassword(), [])
+  const knownAccountEmails = useMemo(() => getKnownAccountEmails(), [])
   const [mode, setMode] = useState('login')
-  const [email, setEmail] = useState(() => rememberedEmail)
-  const [password, setPassword] = useState(() => rememberedPassword)
-  const [rememberMe, setRememberMe] = useState(() => Boolean(rememberedEmail || rememberedPassword))
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [rememberMe, setRememberMe] = useState(() => getRememberMePreference())
   const [resetToken] = useState(() => {
     const hash = String(window.location.hash || '')
     if (!hash.startsWith('#reset=')) return ''
@@ -180,7 +183,6 @@ function AuthScreen({ onAuthenticated, remoteRecovery }) {
   const [resetSentLink, setResetSentLink] = useState('')
   const [errorText, setErrorText] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [autoLoginAttempted, setAutoLoginAttempted] = useState(false)
 
   function tl(key, fallback) {
     const v = t(key)
@@ -206,36 +208,12 @@ function AuthScreen({ onAuthenticated, remoteRecovery }) {
     if (remoteRecovery) setMode('reset')
   }, [remoteRecovery])
 
-  useEffect(() => {
-    if (!rememberMe) return
-    if (!email && rememberedEmail) setEmail(rememberedEmail)
-    if (!password && rememberedPassword) setPassword(rememberedPassword)
-  }, [rememberMe, rememberedEmail, rememberedPassword, email, password])
-
-  useEffect(() => {
-    if (mode !== 'login' || autoLoginAttempted || !rememberMe) return
-    const emailCandidate = String(email || rememberedEmail || '').trim()
-    const passwordCandidate = String(password || rememberedPassword || '')
-    if (!emailCandidate || !passwordCandidate) return
-    setAutoLoginAttempted(true)
-    setIsSubmitting(true)
-    setErrorText('')
-    void loginWithEmail({ email: emailCandidate, password: passwordCandidate, rememberMe: true })
-      .then((session) => onAuthenticated(session))
-      .catch((err) => {
-        setErrorText(err?.message ? String(err.message) : String(err))
-      })
-      .finally(() => setIsSubmitting(false))
-  }, [
-    mode,
-    autoLoginAttempted,
-    rememberMe,
-    email,
-    rememberedEmail,
-    password,
-    rememberedPassword,
-    onAuthenticated,
-  ])
+  useLayoutEffect(() => {
+    const e = getRememberedEmail()
+    const p = getRememberedPassword()
+    if (e) setEmail(e)
+    if (p) setPassword(p)
+  }, [])
 
   async function submit(event) {
     event.preventDefault()
@@ -265,7 +243,7 @@ function AuthScreen({ onAuthenticated, remoteRecovery }) {
           window.location.hash = ''
         }
       } else if (mode === 'signup') {
-        const session = await signUpWithEmail({ email: formEmail, password: formPassword, rememberMe: false })
+        const session = await signUpWithEmail({ email: formEmail, password: formPassword, rememberMe })
         onAuthenticated(session)
       } else {
         const session = await loginWithEmail({ email: formEmail, password: formPassword, rememberMe })
@@ -339,11 +317,24 @@ function AuthScreen({ onAuthenticated, remoteRecovery }) {
             className="field-input"
             type="email"
             autoComplete="email"
+            list={mode !== 'reset' && knownAccountEmails.length ? 'auth-known-accounts' : undefined}
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required={mode !== 'reset'}
             disabled={mode === 'reset'}
           />
+          {mode !== 'reset' && knownAccountEmails.length ? (
+            <datalist id="auth-known-accounts">
+              {knownAccountEmails.map((addr) => (
+                <option key={addr} value={addr} />
+              ))}
+            </datalist>
+          ) : null}
+          {knownAccountEmails.length ? (
+            <span className="muted" style={{ fontSize: 12, marginTop: 4, display: 'block' }}>
+              {tl('auth.knownAccountsHint', 'Pick a previously used email on this device, or type a new one.')}
+            </span>
+          ) : null}
         </label>
         {mode === 'login' ? (
           <>
@@ -358,11 +349,19 @@ function AuthScreen({ onAuthenticated, remoteRecovery }) {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 minLength={8}
-                required={!rememberMe || (!password && !rememberedPassword)}
+                required={!rememberMe || (!password && !getRememberedPassword())}
               />
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => {
+                  const on = e.target.checked
+                  setRememberMe(on)
+                  setRememberMePreference(on)
+                }}
+              />
               <span>{tl('auth.rememberMe', 'Remember me')}</span>
             </label>
           </>
@@ -598,17 +597,35 @@ function AppRoot() {
 
   useEffect(() => {
     if (!isRemoteAuthEnabled()) {
-      setSession(restoreSession())
+      try {
+        setSession(restoreSession())
+      } catch (err) {
+        appLog.error('app.auth.restoreSession.failed', normalizeErrorForLog(err), {})
+        setSession(null)
+      }
       setAuthReady(true)
       return
     }
     let cancelled = false
-    void bootstrapAuth().then(({ session: s }) => {
-      if (!cancelled) {
-        setSession(s)
-        setAuthReady(true)
-      }
-    })
+    const AUTH_BOOTSTRAP_TIMEOUT_MS = 25000
+    void Promise.race([
+      bootstrapAuth(),
+      new Promise((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('Sign-in check timed out. Check your network and Supabase settings.'))
+        }, AUTH_BOOTSTRAP_TIMEOUT_MS)
+      }),
+    ])
+      .then(({ session: s }) => {
+        if (!cancelled) setSession(s)
+      })
+      .catch((err) => {
+        appLog.error('app.auth.bootstrap.failed', normalizeErrorForLog(err), {})
+        if (!cancelled) setSession(null)
+      })
+      .finally(() => {
+        if (!cancelled) setAuthReady(true)
+      })
     return () => {
       cancelled = true
     }

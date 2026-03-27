@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import { useI18n } from '../i18n/useI18n'
 
 export default function SoilVitalityScore({
@@ -7,7 +8,8 @@ export default function SoilVitalityScore({
   errorText,
 }) {
   const { t } = useI18n()
-  const numericScore = typeof score === 'number' ? score : null
+  const gradientId = useId().replace(/:/g, '')
+  const numericScore = Number.isFinite(score) ? score : null
   const progress = numericScore == null ? 0 : Math.max(0, Math.min(100, numericScore))
 
   const r = 54
@@ -19,14 +21,17 @@ export default function SoilVitalityScore({
       <div className="card-body">
         <div className="score-top">
           <div>
-            <p className="muted score-label">{t('common.soilVitalityScore')}</p>
             <p className="score-title">{t('common.soilHealthScore')}</p>
+            <p className="muted score-label">{t('vitality.scoreSubtitle')}</p>
           </div>
 
-          <div className="score-ring" aria-label={`Soil health score: ${progress}`}>
+          <div
+            className="score-ring"
+            aria-label={`${t('common.soilHealthScore')}: ${numericScore == null ? '—' : progress}`}
+          >
             <svg width="140" height="140" viewBox="0 0 140 140">
               <defs>
-                <linearGradient id="scoreGradient" x1="0" y1="0" x2="1" y2="1">
+                <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
                   <stop offset="0%" stopColor="var(--accent-lime)" stopOpacity="0.98" />
                   <stop offset="55%" stopColor="var(--accent-lime-mid)" stopOpacity="0.98" />
                   <stop offset="100%" stopColor="var(--accent-lime-dark)" stopOpacity="0.98" />
@@ -38,7 +43,7 @@ export default function SoilVitalityScore({
                 cy="70"
                 r={r}
                 fill="none"
-                stroke="url(#scoreGradient)"
+                stroke={`url(#${gradientId})`}
                 strokeWidth="12"
                 strokeLinecap="round"
                 strokeDasharray={c}
@@ -70,6 +75,12 @@ export default function SoilVitalityScore({
 
         {status === 'success' && explanation ? (
           <p className="score-explanation">{explanation}</p>
+        ) : null}
+
+        {status === 'success' && errorText ? (
+          <p className="muted score-sub" style={{ marginTop: 8 }}>
+            {errorText}
+          </p>
         ) : null}
       </div>
     </section>

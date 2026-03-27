@@ -53,6 +53,11 @@ export function getResolvedActiveModelName() {
     : gemini.getResolvedGeminiModelName()
 }
 
+/** When Claude is used, some features call Haiku (see `getClaudeHaikuRoutingInfo`). Gemini ignores this. */
+export function getClaudeHaikuRoutingInfo() {
+  return claude.getClaudeHaikuRoutingInfo()
+}
+
 export function setRuntimeGeminiApiKey(key) {
   if (getLlmProvider() === 'claude') return claude.setRuntimeAnthropicApiKey(key)
   return gemini.setRuntimeGeminiApiKey(key)

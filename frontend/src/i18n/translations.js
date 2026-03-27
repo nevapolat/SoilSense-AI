@@ -18,7 +18,6 @@ const translations = {
       requestLocationEnable: 'Please enable location for local soil advice.',
       checkingConditions: "Checking today's conditions...",
       smartAlert: 'Smart Alert',
-      soilVitalityScore: 'Soil Vitality Score',
       soilHealthScore: 'Soil Health Score',
       soilAdvice: 'Soil Health Advisor',
       soilAdviceEmpatheticReminder:
@@ -446,6 +445,7 @@ const translations = {
       couldNotParseResult: 'Could not parse the scan result. Please try again.',
     },
     vitality: {
+      scoreSubtitle: 'Based on weather signals and your activity log',
       calculating: "Calculating from today's weather signals...",
       idleEnableLocation: 'Please enable location for local soil advice.',
       errorCompute: "Couldn't compute the score right now.",
@@ -613,6 +613,7 @@ const translations = {
       email: 'Email',
       password: 'Password',
       rememberMe: 'Remember me',
+      knownAccountsHint: 'Pick a previously used email on this device, or type a new one.',
       working: 'Working...',
       createAccount: 'Create account',
       haveAccount: 'Already have an account? Login',
@@ -668,7 +669,6 @@ const translations = {
       requestLocationEnable: 'Yerel toprak tavsiyesi için lütfen konumu etkinleştirin.',
       checkingConditions: 'Bugünün koşulları kontrol ediliyor...',
       smartAlert: 'Akıllı Uyarı',
-      soilVitalityScore: 'Toprak Canlılık Puanı',
       soilHealthScore: 'Toprak Sağlığı Puanı',
       soilAdvice: 'Toprak Sağlığı Danışmanı',
       soilAdviceEmpatheticReminder:
@@ -964,6 +964,7 @@ const translations = {
       couldNotParseResult: 'Tarama sonucunu okuyamadık. Lütfen tekrar deneyin.',
     },
     vitality: {
+      scoreSubtitle: 'Hava verileri ve aktivite kaydınıza göre',
       calculating: "Bugünün hava sinyallerinden hesaplanıyor...",
       idleEnableLocation: 'Yerel toprak tavsiyesi için lütfen konumu etkinleştirin.',
       errorCompute: "Puan şu anda hesaplanamadı.",
@@ -1167,6 +1168,7 @@ const translations = {
       email: 'E-posta',
       password: 'Şifre',
       rememberMe: 'Beni hatırla',
+      knownAccountsHint: 'Bu cihazda daha önce kullanılan bir e-postayı seçin veya yenisini yazın.',
       working: 'İşleniyor...',
       createAccount: 'Hesap oluştur',
       haveAccount: 'Zaten hesabın var mı? Giriş yap',
@@ -1222,8 +1224,7 @@ const translations = {
       requestLocationEnable: 'Bitte Standort aktivieren für lokale Bodenberatung.',
       checkingConditions: 'Heutige Bedingungen werden geprüft...',
       smartAlert: 'Smart Alert',
-      soilVitalityScore: 'Boden-Vitalitätswert',
-      soilHealthScore: 'Boden-Gesundheitswert',
+      soilHealthScore: 'Boden-Gesundheits-Score',
       soilAdvice: 'Boden-Gesundheitsberater',
       soilAdviceEmpatheticReminder:
         'Bitte denken Sie daran: Gesunde und nährstoffreiche Erde ist eine Reise – kein schneller Fix. Fortschritt braucht Zeit. Seien Sie geduldig, bleiben Sie dran, und die Ergebnisse werden aufblühen. Wir sind hier, um Sie auf jedem Schritt zu begleiten.',
@@ -1575,6 +1576,7 @@ const translations = {
       couldNotParseResult: 'Scan-Ergebnis konnte nicht gelesen werden. Bitte erneut versuchen.',
     },
     vitality: {
+      scoreSubtitle: 'Aus Wettersignalen und Ihrem Aktivitätsprotokoll',
       calculating: 'Berechnung aus heutigen Wettersignalen...',
       idleEnableLocation: 'Bitte Standort aktivieren für lokale Bodenberatung.',
       errorCompute: 'Der Score konnte gerade nicht berechnet werden.',
@@ -1779,6 +1781,7 @@ const translations = {
       email: 'E-Mail',
       password: 'Passwort',
       rememberMe: 'Angemeldet bleiben',
+      knownAccountsHint: 'Wähle eine zuvor auf diesem Gerät genutzte E-Mail oder gib eine neue ein.',
       working: 'Wird verarbeitet...',
       createAccount: 'Konto erstellen',
       haveAccount: 'Du hast bereits ein Konto? Anmelden',
@@ -1834,9 +1837,8 @@ const translations = {
       requestLocationEnable: 'Activa la ubicación para consejos locales sobre el suelo.',
       checkingConditions: 'Comprobando las condiciones de hoy...',
       smartAlert: 'Alerta Inteligente',
-      soilVitalityScore: 'Puntuación de Vitalidad del Suelo',
-      soilHealthScore: 'Puntuación de Salud del Suelo',
-      soilAdvice: 'Asesor de Salud del Suelo',
+      soilHealthScore: 'Puntuación de salud del suelo',
+      soilAdvice: 'Asesor de salud del suelo',
       soilAdviceEmpatheticReminder:
         'Recuerda que sanar y enriquecer tu suelo es un proceso, no una solución rápida. El progreso lleva tiempo. Sé paciente, mantente constante y verás resultados que florecen. Estamos aquí para guiarte en cada paso.',
       retryAdvice: 'Reintentar asesoría',
@@ -2187,6 +2189,7 @@ const translations = {
       couldNotParseResult: 'No se pudo interpretar el resultado. Intenta de nuevo.',
     },
     vitality: {
+      scoreSubtitle: 'Según el clima y tu registro de actividad',
       calculating: 'Calculando con las señales meteorológicas de hoy...',
       idleEnableLocation: 'Activa la ubicación para consejos locales del suelo.',
       errorCompute: 'No se pudo calcular el puntaje ahora mismo.',
@@ -2391,6 +2394,7 @@ const translations = {
       email: 'Correo electrónico',
       password: 'Contraseña',
       rememberMe: 'Recuérdame',
+      knownAccountsHint: 'Elige un correo usado antes en este dispositivo o escribe uno nuevo.',
       working: 'Procesando...',
       createAccount: 'Crear cuenta',
       haveAccount: '¿Ya tienes cuenta? Inicia sesión',
@@ -2446,7 +2450,6 @@ const translations = {
       requestLocationEnable: '请启用位置以获取本地土壤建议。',
       checkingConditions: '正在检查今天的状况...',
       smartAlert: '智能警报',
-      soilVitalityScore: '土壤活力评分',
       soilHealthScore: '土壤健康评分',
       soilAdvice: '土壤健康顾问',
       soilAdviceEmpatheticReminder:
@@ -2798,6 +2801,7 @@ const translations = {
       couldNotParseResult: '无法解析扫描结果，请重试。',
     },
     vitality: {
+      scoreSubtitle: '综合天气与农事活动记录',
       calculating: '正在根据今天的天气信号计算...',
       idleEnableLocation: '请启用位置以获取本地土壤建议。',
       errorCompute: '当前无法计算该评分。',
@@ -2999,6 +3003,7 @@ const translations = {
       email: '邮箱',
       password: '密码',
       rememberMe: '记住我',
+      knownAccountsHint: '选择此设备上曾用过的邮箱，或输入新邮箱。',
       working: '处理中...',
       createAccount: '创建账号',
       haveAccount: '已有账号？去登录',

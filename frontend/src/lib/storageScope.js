@@ -5,6 +5,8 @@ const SHARED_KEYS = new Set([
   'soilsense.auth.deviceId.v1',
   'soilsense.auth.rememberedEmail.v1',
   'soilsense.auth.rememberedPassword.v1',
+  'soilsense.auth.rememberMePreference.v1',
+  'soilsense.auth.knownAccounts.v1',
   'soilsense.auth.reset.v1',
 ])
 

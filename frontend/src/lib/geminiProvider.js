@@ -357,20 +357,29 @@ Formatting rules:
 }
 
 // Task 6: Knowledge Hub (permanent categories).
-export async function generateKnowledgeHub({ lang, correlationId } = {}) {
+export async function generateKnowledgeHub({ lang, correlationId, knowledgeHubContext } = {}) {
   const t0 = performance.now()
   const model = getResolvedGeminiModelName()
   geminiLog.info('gemini.knowledgeHub.start', { model }, { correlationId })
+  const farmerBlock =
+    knowledgeHubContext && typeof knowledgeHubContext === 'object'
+      ? JSON.stringify(knowledgeHubContext, null, 2)
+      : 'Not provided (give broadly applicable regenerative guidance).'
+
   const prompt = `You are a Regenerative Agriculture Expert.
 ${buildLanguageInstruction(lang)}
-Create a permanent Knowledge Hub with exactly these 3 categories:
+
+Farmer context (JSON — use this to personalize summaries and bullets; do not invent private details beyond what is listed; if fields are empty, give broadly useful guidance):
+${farmerBlock}
+
+Create a Knowledge Hub with exactly these 3 categories:
 1) Soil Restoration
 2) Water Conservation
 3) Biodiversity
 
 For each category:
-- Provide a short 1-2 sentence summary.
-- Provide 4-7 permanent bullet points that farmers can apply and revisit.
+- Provide a short 1-2 sentence summary that reflects the farmer's soil type, location/climate hints, crops/equipment, and recent activity when that context is available.
+- Provide 4-7 bullet points. At least 2 bullets per category should explicitly connect to the farmer context (e.g., soil type, climate/water stress, equipment limits, crops listed, recent organic vs chemical use) when context exists; otherwise keep bullets general.
 
 Return ONLY strict JSON (no markdown, no commentary) with this schema:
 {
@@ -394,7 +403,7 @@ Return ONLY strict JSON (no markdown, no commentary) with this schema:
 }
 
 Notes:
-- Bullets should be timeless (not date-specific).
+- Bullets should stay reusable (avoid one-day weather forecasts), but may reference seasonal patterns implied by climate hints.
 - Keep bullets concise and action-oriented.`
 
   try {
