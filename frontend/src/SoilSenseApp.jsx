@@ -46,6 +46,102 @@ import {
 import { fetchOpenMeteoSignals } from './lib/openMeteo'
 
 const storageLog = createLogger('storage')
+
+/** Persisted across F5. Key avoids `locationIntel` JSON drift and must NOT use `activityImpact.fingerprint` (that embeds recency weights from Date.now(), so it changes every reload). */
+const KNOWLEDGE_HUB_PERSIST_KEY = 'soilsense.knowledgeHub.v1'
+
+/** Same activity log + completed tasks → same string after F5 (no time-based decay). */
+function stableKnowledgeHubActivitySignature(activityLog, completedTaskIds) {
+  const taskPart = Array.isArray(completedTaskIds)
+    ? [...completedTaskIds].map(String).sort().join(',')
+    : ''
+  if (!Array.isArray(activityLog) || activityLog.length === 0) {
+    return `0|tasks:${taskPart}`
+  }
+  const rows = activityLog
+    .map((a) => ({
+      type: String(a?.activityTypeId || ''),
+      ts: String(a?.timestamp || ''),
+      qty: typeof a?.quantity === 'number' && Number.isFinite(a.quantity) ? String(a.quantity) : '',
+      unit: String(a?.unit || ''),
+    }))
+    .sort((x, y) => `${x.ts}\t${x.type}`.localeCompare(`${y.ts}\t${y.type}`))
+    .slice(0, 100)
+    .map((x) => `${x.type}\u001f${x.ts}\u001f${x.qty}\u001f${x.unit}`)
+  const body = rows.join('\u001e')
+  const max = 6000
+  return `${activityLog.length}|${body.length > max ? `${body.slice(0, max)}…` : body}|tasks:${taskPart}`
+}
+
+function buildKnowledgeHubDiskCacheKey(lang, coords, profile, profileFingerprint, activitySignature) {
+  const ck =
+    coords && typeof coords.latitude === 'number' && typeof coords.longitude === 'number'
+      ? coordsKey(coords)
+      : 'no-coords'
+  const addr =
+    typeof profile?.address === 'string' ? profile.address.trim().toLowerCase().slice(0, 240) : ''
+  return JSON.stringify({
+    v: 3,
+    lang: lang || 'en',
+    coords: ck,
+    profileFp: profileFingerprint || '',
+    addressKey: addr,
+    activitySig: activitySignature || 'na',
+  })
+}
+
+function loadPersistedKnowledgeHub(cacheKey) {
+  try {
+    const raw = localStorage.getItem(KNOWLEDGE_HUB_PERSIST_KEY)
+    if (!raw) return null
+    const o = JSON.parse(raw)
+    if (!o || o.cacheKey !== cacheKey || !o.hub || typeof o.hub !== 'object') return null
+    if (!Array.isArray(o.hub.categories) || o.hub.categories.length === 0) return null
+    return o.hub
+  } catch {
+    return null
+  }
+}
+
+function persistKnowledgeHubToStorage(cacheKey, hub) {
+  try {
+    const payload = JSON.stringify({ cacheKey, hub, savedAt: Date.now() })
+    localStorage.setItem(KNOWLEDGE_HUB_PERSIST_KEY, payload)
+    storageLog.info('storage.write', { key: KNOWLEDGE_HUB_PERSIST_KEY, bytes: payload.length })
+  } catch (err) {
+    storageLog.warn('storage.write.failed', { key: KNOWLEDGE_HUB_PERSIST_KEY, ...normalizeErrorForLog(err) })
+  }
+}
+
+/** Dashboard: vitality + weather + location intel + farm insight; invalidated by coords/lang/day/profile/activity fingerprint. */
+const DASHBOARD_AI_SNAPSHOT_KEY = 'soilsense.dashboardAiSnapshot.v1'
+const DASHBOARD_AI_SNAPSHOT_MAX_AGE_MS = 48 * 60 * 60 * 1000
+
+function loadDashboardAiSnapshot(expectedCacheKey) {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_AI_SNAPSHOT_KEY)
+    if (!raw) return null
+    const o = JSON.parse(raw)
+    if (!o || o.v !== 1 || typeof o.cacheKey !== 'string' || o.cacheKey !== expectedCacheKey) return null
+    if (typeof o.savedAt !== 'number' || Date.now() - o.savedAt > DASHBOARD_AI_SNAPSHOT_MAX_AGE_MS) return null
+    if (typeof o.aiAdvice !== 'string' || !o.aiAdvice.trim()) return null
+    if (!o.smartWeatherSignals || typeof o.smartWeatherSignals !== 'object') return null
+    if (typeof o.vitalityBaseScore !== 'number' || !Number.isFinite(o.vitalityBaseScore)) return null
+    return o
+  } catch {
+    return null
+  }
+}
+
+function persistDashboardAiSnapshotToStorage(payload) {
+  try {
+    const s = JSON.stringify(payload)
+    localStorage.setItem(DASHBOARD_AI_SNAPSHOT_KEY, s)
+    storageLog.info('storage.write', { key: DASHBOARD_AI_SNAPSHOT_KEY, bytes: s.length })
+  } catch (err) {
+    storageLog.warn('storage.write.failed', { key: DASHBOARD_AI_SNAPSHOT_KEY, ...normalizeErrorForLog(err) })
+  }
+}
 const geoLog = createLogger('geo')
 const uiLog = createLogger('ui')
 const appLog = createLogger('app')
@@ -703,8 +799,9 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
   const [hubStatus, setHubStatus] = useState('idle') // idle|loading|success|error
   const [hubError, setHubError] = useState('')
   const [knowledgeHub, setKnowledgeHub] = useState(null)
-  /** Cache key for Knowledge Hub (lang + profile + activity + location + weather); `null` after error allows retry. */
+  /** Last disk cache key we successfully bound to the Hub UI; `null` after error allows retry. */
   const hubLoadedCacheKeyRef = useRef(null)
+  const knowledgeHubContextPayloadRef = useRef(null)
 
   // Soil advice card (Claude).
   const [aiStatus, setAiStatus] = useState('idle') // idle|loading|success|error
@@ -719,6 +816,8 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
   const [locationIntel, setLocationIntel] = useState(null)
   const [plantScanResult, setPlantScanResult] = useState(null)
   const lastAlertCoordsKeyRef = useRef('')
+  /** Populated after a successful `runSmartAlert` (same tick as coords + `runAdvice`); used to persist dashboard snapshot. */
+  const lastSmartAlertSnapshotRef = useRef(null)
   const lastSmartWeatherFingerprintRef = useRef('')
   const smartWeatherFetchInFlightRef = useRef(false)
   const smartWeatherLastFetchAtRef = useRef(0)
@@ -1370,6 +1469,67 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     return `${profileFingerprint}|${activityImpact?.fingerprint || 'na'}`
   }, [profileFingerprint, activityImpact])
 
+  const dashboardSnapshotCacheKey = useMemo(() => {
+    if (geoStatus !== 'success' || !coords) return null
+    const ck = coordsKey(coords)
+    if (ck === 'invalid') return null
+    return `${ck}|${lang}|${dailyTasksDayKey}|${profileFingerprint}|${activityImpact?.fingerprint || 'na'}`
+  }, [geoStatus, coords, lang, dailyTasksDayKey, profileFingerprint, activityImpact])
+
+  const dashboardSnapshotCacheKeyRef = useRef('')
+  useEffect(() => {
+    dashboardSnapshotCacheKeyRef.current = dashboardSnapshotCacheKey || ''
+  }, [dashboardSnapshotCacheKey])
+
+  useLayoutEffect(() => {
+    if (geoStatus !== 'success' || !coords) return
+    const ck = coordsKey(coords)
+    if (ck === 'invalid' || !dashboardSnapshotCacheKey) return
+    const snap = loadDashboardAiSnapshot(dashboardSnapshotCacheKey)
+    if (!snap) return
+
+    const wf =
+      typeof snap.weatherFingerprint === 'string' && snap.weatherFingerprint
+        ? snap.weatherFingerprint
+        : weatherSignalsFingerprint(snap.smartWeatherSignals || {})
+    const fetchedAt =
+      typeof snap.weatherFetchedAt === 'number' && Number.isFinite(snap.weatherFetchedAt)
+        ? snap.weatherFetchedAt
+        : Date.now()
+
+    setSmartWeatherSignals(snap.smartWeatherSignals)
+    setSmartStatus(snap.smartStatus === 'error' ? 'error' : 'success')
+    setSmartError(typeof snap.smartError === 'string' ? snap.smartError : '')
+    lastSmartWeatherFingerprintRef.current = wf
+    smartWeatherLastFetchAtRef.current = fetchedAt
+
+    setLocationIntel(snap.locationIntel ?? null)
+
+    setVitalityBaseScore(snap.vitalityBaseScore)
+    setVitalityBaseExplanation(typeof snap.vitalityBaseExplanation === 'string' ? snap.vitalityBaseExplanation : '')
+    setVitalityStatus(snap.vitalityStatus === 'error' ? 'error' : 'success')
+    setVitalityError(typeof snap.vitalityError === 'string' ? snap.vitalityError : '')
+
+    setAiAdvice(snap.aiAdvice)
+    setAiStatus(snap.aiStatus === 'error' ? 'error' : 'success')
+    setAiError(typeof snap.aiError === 'string' ? snap.aiError : '')
+
+    lastAdviceCoordsKeyRef.current = ck
+    lastAlertCoordsKeyRef.current = ck
+
+    lastSmartAlertSnapshotRef.current = {
+      smartWeatherSignals: snap.smartWeatherSignals,
+      weatherFingerprint: wf,
+      weatherFetchedAt: fetchedAt,
+      smartStatus: snap.smartStatus === 'error' ? 'error' : 'success',
+      smartError: typeof snap.smartError === 'string' ? snap.smartError : '',
+      vitalityBaseScore: snap.vitalityBaseScore,
+      vitalityBaseExplanation: typeof snap.vitalityBaseExplanation === 'string' ? snap.vitalityBaseExplanation : '',
+      vitalityStatus: snap.vitalityStatus === 'error' ? 'error' : 'success',
+      vitalityError: typeof snap.vitalityError === 'string' ? snap.vitalityError : '',
+    }
+  }, [geoStatus, coords, dashboardSnapshotCacheKey])
+
   const knowledgeHubContextPayload = useMemo(
     () =>
       buildKnowledgeHubContextPayload({
@@ -1387,10 +1547,17 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
       }),
     [profile, coords, activityImpact, smartWeatherSignals, locationIntel]
   )
+  knowledgeHubContextPayloadRef.current = knowledgeHubContextPayload
 
-  const knowledgeHubCacheKey = useMemo(
-    () => JSON.stringify({ lang, ctx: knowledgeHubContextPayload }),
-    [lang, knowledgeHubContextPayload]
+  const knowledgeHubActivitySignature = useMemo(
+    () => stableKnowledgeHubActivitySignature(activityLog, completedTaskIds),
+    [activityLog, completedTaskIds]
+  )
+
+  const knowledgeHubDiskCacheKey = useMemo(
+    () =>
+      buildKnowledgeHubDiskCacheKey(lang, coords, profile, profileFingerprint, knowledgeHubActivitySignature),
+    [lang, coords, profile, profileFingerprint, knowledgeHubActivitySignature]
   )
 
   // State change observer: when Activity/Profile is saved, we trigger
@@ -1786,6 +1953,12 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
   }, [profile?.address])
 
   async function runAdvice({ weatherSignalsOverride, correlationId: correlationIdOverride } = {}) {
+    const incomingWeatherOverride =
+      weatherSignalsOverride && typeof weatherSignalsOverride === 'object' ? weatherSignalsOverride : null
+    if (!incomingWeatherOverride) {
+      lastSmartAlertSnapshotRef.current = null
+    }
+
     const hasCoords =
       Boolean(coords) &&
       typeof coords?.latitude === 'number' &&
@@ -1799,8 +1972,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     setAiError('')
 
     const locationContext = resolveFarmLocationContext({ profile, coords })
-    let weatherSignals =
-      weatherSignalsOverride && typeof weatherSignalsOverride === 'object' ? weatherSignalsOverride : null
+    let weatherSignals = incomingWeatherOverride
     let climateZoneHint = 'unknown'
     let envIntel = null
 
@@ -1924,6 +2096,21 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         const prose = await applyRegenerativeAdviceFromSystem()
         setAiAdvice(prose)
         setAiStatus('success')
+        if (incomingWeatherOverride && lastSmartAlertSnapshotRef.current) {
+          const cacheKey = dashboardSnapshotCacheKeyRef.current
+          if (cacheKey) {
+            persistDashboardAiSnapshotToStorage({
+              v: 1,
+              cacheKey,
+              savedAt: Date.now(),
+              ...lastSmartAlertSnapshotRef.current,
+              locationIntel: envIntel,
+              aiAdvice: prose,
+              aiStatus: 'success',
+              aiError: '',
+            })
+          }
+        }
         return
       }
 
@@ -1966,6 +2153,21 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
 
       setAiAdvice(cleanAdvice)
       setAiStatus('success')
+      if (incomingWeatherOverride && lastSmartAlertSnapshotRef.current) {
+        const cacheKey = dashboardSnapshotCacheKeyRef.current
+        if (cacheKey) {
+          persistDashboardAiSnapshotToStorage({
+            v: 1,
+            cacheKey,
+            savedAt: Date.now(),
+            ...lastSmartAlertSnapshotRef.current,
+            locationIntel: envIntel,
+            aiAdvice: cleanAdvice,
+            aiStatus: 'success',
+            aiError: '',
+          })
+        }
+      }
     } catch (err) {
       if (locationContext.isClear) {
         try {
@@ -1978,6 +2180,21 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
             { reason: err?.message ? String(err.message).slice(0, 120) : 'unknown' },
             { correlationId }
           )
+          if (incomingWeatherOverride && lastSmartAlertSnapshotRef.current) {
+            const cacheKey = dashboardSnapshotCacheKeyRef.current
+            if (cacheKey) {
+              persistDashboardAiSnapshotToStorage({
+                v: 1,
+                cacheKey,
+                savedAt: Date.now(),
+                ...lastSmartAlertSnapshotRef.current,
+                locationIntel: envIntel,
+                aiAdvice: prose,
+                aiStatus: 'success',
+                aiError: '',
+              })
+            }
+          }
           return
         } catch (fallbackErr) {
           uiLog.warn(
@@ -1994,6 +2211,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
 
   async function runSmartAlert({ correlationId: correlationIdOverride, skipDailyTasksGeneration = false } = {}) {
     if (!coords) return
+    lastSmartAlertSnapshotRef.current = null
     const correlationId =
       typeof correlationIdOverride === 'string' && correlationIdOverride.trim().length ? correlationIdOverride : ensureRunId()
     setSmartStatus('loading')
@@ -2054,6 +2272,18 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         },
         { correlationId }
       )
+
+      lastSmartAlertSnapshotRef.current = {
+        smartWeatherSignals: signals,
+        weatherFingerprint: weatherSignalsFingerprint(signals),
+        weatherFetchedAt: smartWeatherLastFetchAtRef.current,
+        smartStatus: 'success',
+        smartError: '',
+        vitalityBaseScore: cappedWeatherPotential,
+        vitalityBaseExplanation: vitalityResolved.explanation,
+        vitalityStatus: 'success',
+        vitalityError: '',
+      }
 
       // Daily Tasks: generate once per day from current weather + vitality.
       // IMPORTANT: profile edits must never change soil health score. Since the score delta is
@@ -2155,7 +2385,20 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
       setVitalityBaseExplanation(scoreFallback.explanation)
       setVitalityStatus('success')
 
-      setVitalityError(formatLlmConfigErrorForUi(err))
+      const vitalityErrUi = formatLlmConfigErrorForUi(err)
+      setVitalityError(vitalityErrUi)
+
+      lastSmartAlertSnapshotRef.current = {
+        smartWeatherSignals: {},
+        weatherFingerprint: weatherSignalsFingerprint({}),
+        weatherFetchedAt: smartWeatherLastFetchAtRef.current,
+        smartStatus: 'success',
+        smartError: '',
+        vitalityBaseScore: cappedWeatherPotential,
+        vitalityBaseExplanation: scoreFallback.explanation,
+        vitalityStatus: 'success',
+        vitalityError: vitalityErrUi,
+      }
 
       if (dailyTasks.length === 0 && !dailyTasksGenerationInFlightRef.current) {
         const hasCropSelection = hasUserGrowSelections(profile)
@@ -2308,6 +2551,12 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     }
   }
 
+  // New calendar day → allow dashboard AI chain to run again (snapshot key includes day).
+  useEffect(() => {
+    lastAdviceCoordsKeyRef.current = ''
+    lastAlertCoordsKeyRef.current = ''
+  }, [dailyTasksDayKey])
+
   // Fetch soil advice + smart alert when coords successfully update (sequential to reduce API burst / rate limits).
   useEffect(() => {
     if (geoStatus !== 'success') return
@@ -2324,7 +2573,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
       await runAdvice({ weatherSignalsOverride: signals })
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coords, geoStatus])
+  }, [coords, geoStatus, dailyTasksDayKey])
 
   useEffect(() => {
     const hasCoords =
@@ -2423,11 +2672,19 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     return () => clearInterval(id)
   }, [activeTab, geoStatus, coords, refreshSmartWeatherSignalsOnly, SMART_WEATHER_REFRESH_MS])
 
-  // Knowledge Hub: load when opening Guide, or when language / farmer context changes.
-  // `knowledgeHubCacheKey` already fingerprints `lang` + `knowledgeHubContextPayload`.
+  // Knowledge Hub: open Guide → localStorage (F5-safe), then network if disk key has no hit.
   useEffect(() => {
     if (activeTab !== 'guide') return
-    if (hubLoadedCacheKeyRef.current === knowledgeHubCacheKey) return
+    if (hubLoadedCacheKeyRef.current === knowledgeHubDiskCacheKey) return
+
+    const fromDisk = loadPersistedKnowledgeHub(knowledgeHubDiskCacheKey)
+    if (fromDisk) {
+      hubLoadedCacheKeyRef.current = knowledgeHubDiskCacheKey
+      setKnowledgeHub(fromDisk)
+      setHubStatus('success')
+      setHubError('')
+      return
+    }
 
     setHubStatus('loading')
     setHubError('')
@@ -2440,7 +2697,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         const hub = await generateKnowledgeHub({
           lang,
           correlationId,
-          knowledgeHubContext: knowledgeHubContextPayload,
+          knowledgeHubContext: knowledgeHubContextPayloadRef.current,
         })
         if (cancelled) return
         if (!hub || typeof hub !== 'object') {
@@ -2454,7 +2711,8 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         if (!Array.isArray(hub?.categories) || hub.categories.length === 0) {
           throw new Error('Knowledge Hub categories unavailable.')
         }
-        hubLoadedCacheKeyRef.current = knowledgeHubCacheKey
+        hubLoadedCacheKeyRef.current = knowledgeHubDiskCacheKey
+        persistKnowledgeHubToStorage(knowledgeHubDiskCacheKey, hub)
         setKnowledgeHub(hub)
         setHubStatus('success')
         const categories = Array.isArray(hub?.categories) ? hub.categories : []
@@ -2479,8 +2737,8 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
       // handler bails out without updating state — avoid leaving the card stuck on "loading".
       setHubStatus((s) => (s === 'loading' ? 'idle' : s))
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- knowledgeHubCacheKey encodes lang + farmer context
-  }, [activeTab, knowledgeHubCacheKey])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- payload read from ref so weather ticks do not cancel fetch
+  }, [activeTab, knowledgeHubDiskCacheKey, lang])
 
   return (
     <div className="app-shell">
@@ -3056,6 +3314,12 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
                       className="btn btn-primary"
                       onClick={() => {
                         lastAdviceCoordsKeyRef.current = ''
+                        lastAlertCoordsKeyRef.current = ''
+                        try {
+                          localStorage.removeItem(DASHBOARD_AI_SNAPSHOT_KEY)
+                        } catch {
+                          /* ignore */
+                        }
                         runAdvice()
                       }}
                     >
