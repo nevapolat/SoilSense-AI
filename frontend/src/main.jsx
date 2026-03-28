@@ -1,4 +1,12 @@
-import { StrictMode, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import {
+  Component,
+  StrictMode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import './App.css'
@@ -16,6 +24,7 @@ import {
   deleteUserField,
   getUserById,
   hydrateRemoteSessionAfterAuth,
+  isPasswordRecoverySession,
   isRemoteAuthEnabled,
   loginWithEmail,
   logoutSession,
@@ -47,6 +56,98 @@ import {
 const appLog = createLogger('app')
 const pwaLog = createLogger('pwa')
 const PROFILE_STORAGE_KEY = 'soilsense.profile'
+
+/** Dev-only: always prints to the terminal running Vite (via vite.config middleware). */
+function devTerminalLog(level, namespace, event, meta) {
+  if (!import.meta.env.DEV || typeof fetch === 'undefined') return
+  try {
+    fetch('/__soilsense/dev-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level,
+        namespace,
+        event,
+        meta: meta && typeof meta === 'object' ? meta : {},
+      }),
+      keepalive: true,
+    }).catch(() => {})
+  } catch {
+    // ignore
+  }
+}
+
+/** Catches render errors so the tab is not a blank white screen; logs to console + dev terminal. */
+class RootErrorBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { err: null }
+  }
+
+  static getDerivedStateFromError(err) {
+    return { err }
+  }
+
+  componentDidCatch(err, info) {
+    // eslint-disable-next-line no-console -- intentional: visible even if logger fails
+    console.error('[SoilSense] React render error', err, info?.componentStack)
+    appLog.error(
+      'app.root.renderError',
+      {
+        message: err?.message != null ? String(err.message) : String(err),
+        name: err?.name,
+        stackPreview: err?.stack != null ? String(err.stack).slice(0, 1200) : undefined,
+        componentStackPreview:
+          info?.componentStack != null ? String(info.componentStack).slice(0, 800) : undefined,
+      },
+      {}
+    )
+  }
+
+  render() {
+    const { err } = this.state
+    if (err) {
+      const msg = err?.message != null ? String(err.message) : String(err)
+      return (
+        <div
+          style={{
+            padding: 24,
+            fontFamily: 'system-ui, sans-serif',
+            maxWidth: 640,
+            margin: '48px auto',
+            lineHeight: 1.5,
+          }}
+        >
+          <h1 style={{ marginTop: 0 }}>Bir hata oluştu / Something went wrong</h1>
+          <p style={{ color: '#444' }}>
+            Tarayıcıda <strong>F12 → Console</strong> sekmesine bakın. Geliştirme sunucusunda bu hata ayrıca terminalde de listelenir.
+          </p>
+          <pre
+            style={{
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              background: '#f4f4f5',
+              padding: 16,
+              borderRadius: 8,
+              fontSize: 13,
+            }}
+          >
+            {msg}
+          </pre>
+          <button
+            type="button"
+            style={{ marginTop: 16, padding: '10px 16px', cursor: 'pointer' }}
+            onClick={() => window.location.reload()}
+          >
+            Sayfayı yenile / Reload
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 function parseNumberOrNull(value) {
   const n = Number(String(value || '').trim())
@@ -236,6 +337,11 @@ function AuthScreen({ onAuthenticated, remoteRecovery }) {
           if (nextSession) onAuthenticated(nextSession)
           setMode('login')
           setPassword('')
+          try {
+            window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
+          } catch {
+            // ignore
+          }
         } else {
           await resetPasswordWithToken(resetToken, formPassword)
           setMode('login')
@@ -262,6 +368,10 @@ function AuthScreen({ onAuthenticated, remoteRecovery }) {
       const el = typeof document !== 'undefined' ? document.getElementById('auth-email') : null
       const raw = el && 'value' in el ? el.value : email
       const addr = normalizeEmail(raw)
+      if (!addr.includes('@')) {
+        setErrorText(tl('auth.enterEmailForReset', 'Enter your email address first, then tap Forgot password.'))
+        return
+      }
       const res = await requestPasswordReset(addr)
       setResetSentLink(res.link || (isRemoteAuthEnabled() ? '__remote_sent__' : ''))
       if (addr && res.link) {
@@ -608,6 +718,13 @@ function AppRoot() {
     }
     let cancelled = false
     const AUTH_BOOTSTRAP_TIMEOUT_MS = 25000
+    const remoteOn = isRemoteAuthEnabled()
+    appLog.info('app.auth.bootstrap.start', { remote: remoteOn })
+    devTerminalLog('info', 'app', 'app.auth.bootstrap.start', { remote: remoteOn })
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console -- visible in browser console if logger level filters info
+      console.info('[SoilSense] auth bootstrap start', { remote: remoteOn })
+    }
     void Promise.race([
       bootstrapAuth(),
       new Promise((_, reject) => {
@@ -616,8 +733,25 @@ function AppRoot() {
         }, AUTH_BOOTSTRAP_TIMEOUT_MS)
       }),
     ])
-      .then(({ session: s }) => {
-        if (!cancelled) setSession(s)
+      .then((result) => {
+        if (cancelled) return
+        const pending = Boolean(result?.pendingPasswordRecovery)
+        if (pending) {
+          setRemoteRecovery(true)
+          setSession(null)
+        } else {
+          setSession(result?.session ?? null)
+        }
+        const doneMeta = {
+          pendingPasswordRecovery: pending,
+          hasSession: Boolean(result?.session?.userId),
+        }
+        appLog.info('app.auth.bootstrap.done', doneMeta)
+        devTerminalLog('info', 'app', 'app.auth.bootstrap.done', doneMeta)
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.info('[SoilSense] auth bootstrap done', doneMeta)
+        }
       })
       .catch((err) => {
         appLog.error('app.auth.bootstrap.failed', normalizeErrorForLog(err), {})
@@ -637,8 +771,18 @@ function AppRoot() {
     if (!sb) return
     const {
       data: { subscription },
-    } = sb.auth.onAuthStateChange((event) => {
+    } = sb.auth.onAuthStateChange((event, authSession) => {
       if (event === 'PASSWORD_RECOVERY') {
+        clearRemoteUserCache()
+        setRemoteRecovery(true)
+        setSession(null)
+        return
+      }
+      if (
+        (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') &&
+        authSession &&
+        isPasswordRecoverySession(authSession)
+      ) {
         clearRemoteUserCache()
         setRemoteRecovery(true)
         setSession(null)
@@ -1624,10 +1768,18 @@ if ('serviceWorker' in navigator) {
   }
 }
 
-createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    <I18nProvider>
-      <AppRoot />
-    </I18nProvider>
-  </StrictMode>,
-)
+const rootEl = document.getElementById('root')
+if (!rootEl) {
+  // eslint-disable-next-line no-console -- boot failure must be visible
+  console.error('[SoilSense] Missing #root in index.html')
+} else {
+  createRoot(rootEl).render(
+    <StrictMode>
+      <RootErrorBoundary>
+        <I18nProvider>
+          <AppRoot />
+        </I18nProvider>
+      </RootErrorBoundary>
+    </StrictMode>
+  )
+}

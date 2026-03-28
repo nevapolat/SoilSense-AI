@@ -8,8 +8,8 @@ export const LOG_NAMESPACES = [
   'i18n',
   'geo',
   'weather',
-  'gemini',
   'claude',
+  'usage',
   'storage',
   'pwa',
   'ui',
@@ -25,8 +25,21 @@ const LEVEL_RANK = { debug: 0, info: 1, warn: 2, error: 3 }
 const RING_STORAGE_KEY = 'soilsense.diagnosticsLogRing'
 const RING_MAX = 200
 
-const SENSITIVE_KEY_RE =
-  /(api[_-]?key|token|password|secret|authorization|bearer|VITE_GEMINI_API_KEY|VITE_ANTHROPIC_API_KEY|runtimeGemini|runtimeAnthropic)/i
+/** Object property names that often hold secrets (redact values under these keys). */
+const SENSITIVE_META_KEY_RE =
+  /(api[_-]?key|token|password|secret|authorization|bearer|runtimeAnthropic)/i
+
+/**
+ * Entire string redaction — only when the string itself likely embeds a secret value.
+ * Env var *names* in help text (e.g. VITE_ANTHROPIC_API_KEY) must NOT trigger this, or dev logs become useless.
+ */
+function stringLooksLikeEmbeddedSecret(s) {
+  const t = String(s)
+  if (/sk-ant-[a-z0-9_-]{8,}/i.test(t)) return true
+  if (/\bVITE_ANTHROPIC(?:_HAIKU)?_API_KEY\s*=\s*\S{4,}/i.test(t)) return true
+  if (/bearer\s+[a-z0-9._+-]{12,}/i.test(t)) return true
+  return false
+}
 
 function resolveMinLevel() {
   const raw = import.meta.env.VITE_LOG_LEVEL
@@ -65,7 +78,7 @@ export function sanitizeMeta(value, depth = 0) {
   if (depth > 6) return '[max-depth]'
   if (value == null) return value
   if (typeof value === 'string') {
-    if (SENSITIVE_KEY_RE.test(value)) return '[redacted-string]'
+    if (stringLooksLikeEmbeddedSecret(value)) return '[redacted-string]'
     return truncateString(value, 400)
   }
   if (typeof value === 'number' || typeof value === 'boolean') return value
@@ -75,7 +88,7 @@ export function sanitizeMeta(value, depth = 0) {
   if (typeof value === 'object') {
     const out = {}
     for (const [k, v] of Object.entries(value)) {
-      if (SENSITIVE_KEY_RE.test(k)) {
+      if (SENSITIVE_META_KEY_RE.test(k)) {
         out[k] = '[redacted]'
         continue
       }
@@ -248,6 +261,23 @@ export function logEvent(opts) {
         t.emit(record)
       } catch {
         // never throw from logging
+      }
+    }
+    if (
+      import.meta.env.DEV &&
+      level === 'error' &&
+      typeof fetch !== 'undefined' &&
+      !TERMINAL_LOG_ENABLED
+    ) {
+      try {
+        fetch('/__soilsense/dev-log', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(record),
+          keepalive: true,
+        }).catch(() => {})
+      } catch {
+        // ignore
       }
     }
   }

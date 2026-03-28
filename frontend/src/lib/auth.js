@@ -85,6 +85,47 @@ export function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase()
 }
 
+function decodeJwtPayload(accessToken) {
+  try {
+    const parts = String(accessToken || '').split('.')
+    if (parts.length < 2) return null
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+    const json = atob(padded)
+    return JSON.parse(json)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Supabase password-recovery sessions (especially PKCE) may emit SIGNED_IN instead of PASSWORD_RECOVERY.
+ * JWT `amr` then includes a recovery method — use this so we always show "set new password" before dashboard.
+ */
+export function isPasswordRecoverySession(session) {
+  const payload = decodeJwtPayload(session?.access_token)
+  if (!payload || !Array.isArray(payload.amr)) return false
+  return payload.amr.some((m) => {
+    if (m === 'recovery') return true
+    if (m && typeof m === 'object' && m.method === 'recovery') return true
+    return false
+  })
+}
+
+function formatSupabaseResetError(message) {
+  const msg = String(message || '')
+  if (/redirect|redirect_to|url/i.test(msg) && /not\s*allowed|invalid|whitelist|configure/i.test(msg)) {
+    return (
+      'Password reset could not be sent: this site URL is not allowed in Supabase. ' +
+      'Open Supabase Dashboard → Authentication → URL Configuration → Redirect URLs, ' +
+      'and add exactly: ' +
+      `${typeof window !== 'undefined' ? window.location.origin : ''}` +
+      ' (and your production URL if different). Optional: set VITE_SUPABASE_AUTH_REDIRECT_URL in .env to match an allowed URL.'
+    )
+  }
+  return msg
+}
+
 function isRemoteAuth() {
   return isRemoteAuthConfigured()
 }
@@ -253,6 +294,7 @@ export async function completeRemotePasswordRecovery(newPassword) {
   if (!isRemoteAuth() || !sb) throw new Error('Password recovery is not available.')
   const { error } = await sb.auth.updateUser({ password: newPassword })
   if (error) throw new Error(error.message)
+  await sb.auth.refreshSession().catch(() => {})
 }
 
 /**
@@ -260,18 +302,21 @@ export async function completeRemotePasswordRecovery(newPassword) {
  */
 export async function bootstrapAuth() {
   if (!isRemoteAuth()) {
-    return { session: restoreSession(), ready: true }
+    return { session: restoreSession(), ready: true, pendingPasswordRecovery: false }
   }
   remoteUserCache = null
   const sb = getSupabaseClient()
   if (!sb) {
-    return { session: null, ready: true }
+    return { session: null, ready: true, pendingPasswordRecovery: false }
   }
   const {
     data: { session },
   } = await sb.auth.getSession()
   if (!session?.user?.id) {
-    return { session: null, ready: true }
+    return { session: null, ready: true, pendingPasswordRecovery: false }
+  }
+  if (isPasswordRecoverySession(session)) {
+    return { session: null, ready: true, pendingPasswordRecovery: true }
   }
   const uid = session.user.id
   let user = await fetchRemoteProfile(uid)
@@ -288,6 +333,7 @@ export async function bootstrapAuth() {
       createdAt: new Date().toISOString(),
     },
     ready: true,
+    pendingPasswordRecovery: false,
   }
 }
 
@@ -853,12 +899,19 @@ function saveResetRequests(items) {
 
 export async function requestPasswordReset(email) {
   const normalizedEmail = normalizeEmail(email)
+  if (!normalizedEmail.includes('@')) {
+    throw new Error('Enter a valid email address.')
+  }
   if (isRemoteAuth()) {
     const sb = getSupabaseClient()
     if (!sb) return { sent: true, link: '' }
-    const redirectTo = `${window.location.origin}${window.location.pathname}`
+    const fromEnv =
+      import.meta.env.VITE_SUPABASE_AUTH_REDIRECT_URL != null
+        ? String(import.meta.env.VITE_SUPABASE_AUTH_REDIRECT_URL).trim()
+        : ''
+    const redirectTo = fromEnv || `${window.location.origin}${window.location.pathname}`
     const { error } = await sb.auth.resetPasswordForEmail(normalizedEmail, { redirectTo })
-    if (error) throw new Error(error.message)
+    if (error) throw new Error(formatSupabaseResetError(error.message))
     return { sent: true, link: '' }
   }
   const db = loadDb()
