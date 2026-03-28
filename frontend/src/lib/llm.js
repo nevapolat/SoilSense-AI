@@ -1,20 +1,35 @@
-import * as gemini from './geminiProvider.js'
+import {
+  ANTHROPIC_USAGE_KEYS,
+  getAnthropicUsageTelemetrySnapshot,
+  resetAnthropicUsageTelemetry,
+} from './anthropicUsageTelemetry.js'
 import * as claude from './claudeProvider.js'
 import { buildSoilVitalityScoreFallback } from './llmShared.js'
 import { extractJson } from './llmJson.js'
 
 /**
- * Which backend to use: `gemini` (Google) or `claude` (Anthropic).
- * Set `VITE_LLM_PROVIDER=claude` in frontend/.env and restart Vite.
+ * LLM backend is Anthropic Claude only (`VITE_ANTHROPIC_API_KEY`).
+ * Soil health advisor uses the primary model (default Haiku; see `getResolvedClaudeSoilAdviceModelName` in claudeProvider).
  */
 export function getLlmProvider() {
-  const p = (import.meta.env.VITE_LLM_PROVIDER || 'gemini').toString().trim().toLowerCase()
-  if (p === 'claude' || p === 'anthropic') return 'claude'
-  return 'gemini'
+  return 'claude'
 }
 
-function impl() {
-  return getLlmProvider() === 'claude' ? claude : gemini
+/** True when the failure is missing/disallowed LLM env key (not a transient network error). */
+export function isLlmConfigurationError(err) {
+  const msg = err?.message != null ? String(err.message) : String(err)
+  return /VITE_ANTHROPIC_(API_KEY|HAIKU_API_KEY)|API key is not configured|frontend[\\/]\.env|dev server|restart the dev server/i.test(
+    msg
+  )
+}
+
+/**
+ * For missing/invalid API key errors we return an empty string so the UI does not show the long
+ * Netlify/.env instructions. Other errors return as-is.
+ */
+export function formatLlmConfigErrorForUi(err) {
+  if (isLlmConfigurationError(err)) return ''
+  return err?.message != null ? String(err.message) : String(err)
 }
 
 let runtimePreferredLanguage = ''
@@ -48,68 +63,68 @@ function withPreferredLanguage(opts) {
 }
 
 export function getResolvedActiveModelName() {
-  return getLlmProvider() === 'claude'
-    ? claude.getResolvedClaudeModelName()
-    : gemini.getResolvedGeminiModelName()
+  return claude.getResolvedClaudeModelName()
 }
 
-/** When Claude is used, some features call Haiku (see `getClaudeHaikuRoutingInfo`). Gemini ignores this. */
+/** All Claude calls use Haiku (see `getClaudeHaikuRoutingInfo`). */
 export function getClaudeHaikuRoutingInfo() {
   return claude.getClaudeHaikuRoutingInfo()
 }
 
+export { ANTHROPIC_USAGE_KEYS, getAnthropicUsageTelemetrySnapshot, resetAnthropicUsageTelemetry }
+
 export function setRuntimeGeminiApiKey(key) {
-  if (getLlmProvider() === 'claude') return claude.setRuntimeAnthropicApiKey(key)
-  return gemini.setRuntimeGeminiApiKey(key)
+  return claude.setRuntimeAnthropicApiKey(key)
 }
 
 export function clearRuntimeGeminiApiKey() {
-  if (getLlmProvider() === 'claude') return claude.clearRuntimeAnthropicApiKey()
-  return gemini.clearRuntimeGeminiApiKey()
+  return claude.clearRuntimeAnthropicApiKey()
 }
 
 export function getRuntimeGeminiApiKey() {
-  if (getLlmProvider() === 'claude') return claude.getRuntimeAnthropicApiKey()
-  return gemini.getRuntimeGeminiApiKey()
+  return claude.getRuntimeAnthropicApiKey()
 }
 
 export async function generateRegenerativeAdvice(opts) {
-  return impl().generateRegenerativeAdvice(withPreferredLanguage(opts))
+  const o = withPreferredLanguage(opts)
+  return claude.generateRegenerativeAdvice(o)
 }
 
 export async function generateCompostRecipe(inventoryInput, opts) {
-  return impl().generateCompostRecipe(inventoryInput, withPreferredLanguage(opts))
+  const o = withPreferredLanguage(opts)
+  return claude.generateCompostRecipe(inventoryInput, o)
 }
 
 export async function generateKnowledgeHub(opts) {
-  return impl().generateKnowledgeHub(withPreferredLanguage(opts))
+  const o = withPreferredLanguage(opts)
+  return claude.generateKnowledgeHub(o)
 }
 
 export async function generateSmartAlert(opts) {
-  return impl().generateSmartAlert(withPreferredLanguage(opts))
+  const o = withPreferredLanguage(opts)
+  return claude.generateSmartAlert(o)
 }
 
 export { buildSoilVitalityScoreFallback }
 
 export async function generateSoilVitalityScore(opts) {
-  return impl().generateSoilVitalityScore(withPreferredLanguage(opts))
-}
-
-export async function testGeminiApiKey(apiKey, opts) {
-  if (getLlmProvider() === 'claude') return claude.testClaudeApiKey(apiKey, opts)
-  return gemini.testGeminiApiKey(apiKey, opts)
+  const o = withPreferredLanguage(opts)
+  return claude.generateSoilVitalityScore(o)
 }
 
 export async function generatePlantScan(opts) {
-  return impl().generatePlantScan(withPreferredLanguage(opts))
+  const o = withPreferredLanguage(opts)
+  return claude.generatePlantScan(o)
 }
 
 export async function generateDailyTasks(opts) {
-  return impl().generateDailyTasks(withPreferredLanguage(opts))
+  const o = withPreferredLanguage(opts)
+  return claude.generateDailyTasks(o)
 }
 
 export async function generateLocationEnvironmentalAnalysis(opts) {
-  return impl().generateLocationEnvironmentalAnalysis(withPreferredLanguage(opts))
+  const o = withPreferredLanguage(opts)
+  return claude.generateLocationEnvironmentalAnalysis(o)
 }
 
 function normalizeFarmInsight(candidate, fallbackLocationUsed) {
@@ -154,64 +169,15 @@ function normalizeFarmInsight(candidate, fallbackLocationUsed) {
   }
 }
 
-function uniqueRecommendations(primary = [], secondary = []) {
-  const out = []
-  const seen = new Set()
-  for (const item of [...primary, ...secondary]) {
-    const text = typeof item === 'string' ? item.trim() : ''
-    if (!text) continue
-    const key = text.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(text)
-    if (out.length >= 6) break
-  }
-  return out
-}
-
 export async function generateFarmDailyInsight(opts) {
   const resolved = withPreferredLanguage(opts)
   const locationUsed =
     typeof resolved?.locationContext?.locationUsed === 'string' ? resolved.locationContext.locationUsed : 'unknown'
 
-  const primaryProvider = getLlmProvider()
-  const primaryImpl = primaryProvider === 'claude' ? claude : gemini
-  const secondaryImpl = primaryProvider === 'claude' ? gemini : claude
-
-  const primaryRaw = await primaryImpl.generateFarmDailyInsight(resolved)
+  const primaryRaw = await claude.generateFarmDailyInsight(resolved)
   let primary = primaryRaw
   if (primaryRaw?.parseError && typeof primaryRaw?.rawText === 'string') {
     primary = extractJson(primaryRaw.rawText) || primaryRaw
   }
-  const primaryNorm = normalizeFarmInsight(primary, locationUsed)
-
-  try {
-    const secondaryRaw = await secondaryImpl.generateFarmDailyInsight(resolved)
-    let secondary = secondaryRaw
-    if (secondaryRaw?.parseError && typeof secondaryRaw?.rawText === 'string') {
-      secondary = extractJson(secondaryRaw.rawText) || secondaryRaw
-    }
-    const secondaryNorm = normalizeFarmInsight(secondary, locationUsed)
-
-    return {
-      ...primaryNorm,
-      recommendations: uniqueRecommendations(primaryNorm.recommendations, secondaryNorm.recommendations),
-      confidence_level:
-        primaryNorm.confidence_level === secondaryNorm.confidence_level ? primaryNorm.confidence_level : 'medium',
-      model_consensus:
-        primaryNorm.soil_health_status.toLowerCase() === secondaryNorm.soil_health_status.toLowerCase()
-          ? 'aligned'
-          : 'partial',
-    }
-  } catch {
-    return primaryNorm
-  }
-}
-
-export function getGeminiModel(opts) {
-  return gemini.getGeminiModel(opts)
-}
-
-export function getResolvedGeminiModelName() {
-  return gemini.getResolvedGeminiModelName()
+  return normalizeFarmInsight(primary, locationUsed)
 }

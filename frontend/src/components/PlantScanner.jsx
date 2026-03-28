@@ -1,10 +1,24 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Camera, Image, UploadCloud, ScanSearch, Leaf, AlertTriangle } from 'lucide-react'
-import { generatePlantScan } from '../lib/gemini'
+import { generatePlantScan } from '../lib/ai'
 import { useI18n } from '../i18n/useI18n'
 import { createLogger, generateRunId } from '../lib/logger'
 
 const uiLog = createLogger('ui')
+
+/** File inputs often omit `type` or use `image/*`; APIs need a concrete image/* subtype. */
+function normalizePlantImageMimeType(file) {
+  const raw = typeof file?.type === 'string' ? file.type.trim().toLowerCase() : ''
+  if (/^image\/(jpeg|jpg|png|gif|webp)$/.test(raw)) {
+    return raw === 'image/jpg' ? 'image/jpeg' : raw
+  }
+  const name = typeof file?.name === 'string' ? file.name.toLowerCase() : ''
+  if (name.endsWith('.png')) return 'image/png'
+  if (name.endsWith('.gif')) return 'image/gif'
+  if (name.endsWith('.webp')) return 'image/webp'
+  if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg'
+  return 'image/jpeg'
+}
 
 export default function PlantScanner({ onScanComplete, lang } = {}) {
   const { t } = useI18n()
@@ -18,6 +32,21 @@ export default function PlantScanner({ onScanComplete, lang } = {}) {
   const [result, setResult] = useState(null)
 
   const canScan = useMemo(() => Boolean(imageBase64 && mimeType), [imageBase64, mimeType])
+  const previewObjectUrlRef = useRef('')
+
+  useEffect(
+    () => () => {
+      if (previewObjectUrlRef.current) {
+        try {
+          URL.revokeObjectURL(previewObjectUrlRef.current)
+        } catch {
+          /* ignore */
+        }
+        previewObjectUrlRef.current = ''
+      }
+    },
+    []
+  )
 
   async function fileToBase64(file) {
     return new Promise((resolve, reject) => {
@@ -47,11 +76,19 @@ export default function PlantScanner({ onScanComplete, lang } = {}) {
     setError('')
     setResult(null)
 
-    // Preview for UX (object URL).
+    // Preview for UX (object URL); revoke previous blob URL to avoid leaks.
     const objUrl = URL.createObjectURL(file)
+    if (previewObjectUrlRef.current) {
+      try {
+        URL.revokeObjectURL(previewObjectUrlRef.current)
+      } catch {
+        /* ignore */
+      }
+    }
+    previewObjectUrlRef.current = objUrl
     setPreviewUrl(objUrl)
 
-    setMimeType(file.type || 'image/*')
+    setMimeType(normalizePlantImageMimeType(file))
     const base64 = await fileToBase64(file)
     setImageBase64(base64)
   }

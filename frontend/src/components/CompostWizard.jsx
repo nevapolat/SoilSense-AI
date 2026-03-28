@@ -8,7 +8,7 @@ import {
   TreeDeciduous,
   Trash2,
 } from 'lucide-react'
-import { generateCompostRecipe } from '../lib/gemini'
+import { generateCompostRecipe } from '../lib/ai'
 import { createLogger, generateRunId } from '../lib/logger'
 
 const uiLog = createLogger('ui')

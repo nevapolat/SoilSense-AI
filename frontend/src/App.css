@@ -1215,17 +1215,6 @@
   max-width: 28rem;
 }
 
-/* Gemini API Key testing panel */
-.gemini-key-card {
-  border-color: rgba(27, 67, 50, 0.35);
-  background: rgba(250, 247, 232, 0.55);
-}
-
-.gemini-key-label {
-  font-weight: 900;
-  font-size: 13px;
-}
-
 .key-actions {
   display: flex;
   gap: 10px;
@@ -1234,14 +1223,6 @@
 
 .key-actions .btn {
   width: 100%;
-}
-
-.runtime-key-banner-inner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
 }
 
 /* Soil Vitality Score */

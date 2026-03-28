@@ -1,4 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk'
+import {
+  ANTHROPIC_USAGE_KEYS,
+  recordAnthropicUsage,
+  usageFromAnthropicMessage,
+} from './anthropicUsageTelemetry.js'
 import { createLogger, normalizeErrorForLog } from './logger'
 import { extractJson } from './llmJson.js'
 import { estimateTextTokens, estimateBase64PayloadTokens } from './tokenEstimate.js'
@@ -10,17 +15,10 @@ import {
   normalizeInventory,
 } from './llmShared.js'
 
-// Snapshot IDs like claude-3-5-sonnet-20241022 may be retired; use a current ID (see Anthropic models docs).
-const DEFAULT_MODEL = 'claude-sonnet-4-20250514'
+// All Claude calls use Haiku (`VITE_CLAUDE_HAIKU_MODEL` or default below). Optional `VITE_CLAUDE_SOIL_ADVICE_MODEL` overrides only soil-advisor text.
 const DEFAULT_HAIKU_MODEL = 'claude-haiku-4-5-20251001'
 
 const claudeLog = createLogger('claude')
-
-export function getResolvedClaudeModelName() {
-  const raw = import.meta.env.VITE_CLAUDE_MODEL
-  const fromEnv = raw != null && String(raw).trim() !== '' ? String(raw).trim() : ''
-  return fromEnv || DEFAULT_MODEL
-}
 
 export function getResolvedClaudeHaikuModelName() {
   const raw = import.meta.env.VITE_CLAUDE_HAIKU_MODEL
@@ -28,63 +26,37 @@ export function getResolvedClaudeHaikuModelName() {
   return fromEnv || DEFAULT_HAIKU_MODEL
 }
 
-/**
- * Haiku-friendly: structured JSON, short/medium text. Sonnet stays default for vision (plant scan).
- * Users can override via VITE_CLAUDE_HAIKU_FEATURES (comma list or `none`).
- */
-const DEFAULT_HAIKU_FEATURES = [
-  'knowledgehub',
-  'smartalert',
-  'dailytasks',
-  'soiladvice',
-  'compostrecipe',
-  'soilvitality',
-  'locationintel',
-  'farmdailyinsight',
-  'apikeytest',
-]
-
-/**
- * Which logical features route to Haiku (lowercase ids, matching resolveClaudeModelForFeature('knowledgeHub') etc.).
- * Exported so UI/diagnostics can confirm routing without duplicating env rules.
- */
-export function getHaikuFeatureListFromEnv() {
-  const raw = import.meta.env.VITE_CLAUDE_HAIKU_FEATURES
-  if (raw === undefined || raw === null || String(raw).trim() === '') {
-    return { features: [...DEFAULT_HAIKU_FEATURES], mode: 'default' }
-  }
-  const t = String(raw).trim().toLowerCase()
-  if (t === 'none' || t === 'off' || t === 'false' || t === '0') {
-    return { features: [], mode: 'disabled' }
-  }
-  const features = String(raw)
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean)
-  return { features, mode: 'explicit' }
+/** @deprecated Use `getResolvedClaudeHaikuModelName`; kept as an alias — this app is Haiku-only. */
+export function getResolvedClaudeModelName() {
+  return getResolvedClaudeHaikuModelName()
 }
 
-/** For diagnostics: primary vs Haiku model IDs and active Haiku feature list. */
+/**
+ * Soil health advisor model. Defaults to the same Haiku id as everything else; set `VITE_CLAUDE_SOIL_ADVICE_MODEL` for a different snapshot.
+ */
+export function getResolvedClaudeSoilAdviceModelName() {
+  const raw = import.meta.env.VITE_CLAUDE_SOIL_ADVICE_MODEL
+  const fromEnv = raw != null && String(raw).trim() !== '' ? String(raw).trim() : ''
+  return fromEnv || getResolvedClaudeHaikuModelName()
+}
+
+/** For diagnostics: every feature uses `haikuModel`. */
 export function getClaudeHaikuRoutingInfo() {
-  const { features, mode } = getHaikuFeatureListFromEnv()
+  const model = getResolvedClaudeHaikuModelName()
   return {
-    primaryModel: getResolvedClaudeModelName(),
-    haikuModel: getResolvedClaudeHaikuModelName(),
-    haikuFeatures: features,
-    haikuFeatureMode: mode,
+    primaryModel: model,
+    soilAdviceModel: getResolvedClaudeSoilAdviceModelName(),
+    haikuModel: model,
+    haikuFeatures: [],
+    haikuFeatureMode: 'all_haiku',
+    dedicatedHaikuApiKeySet: Boolean(trimEnv(import.meta.env.VITE_ANTHROPIC_HAIKU_API_KEY)),
   }
 }
 
 function resolveClaudeModelForFeature(feature) {
   const f = typeof feature === 'string' ? feature.trim().toLowerCase() : ''
-  if (!f) return getResolvedClaudeModelName()
-
-  const { features } = getHaikuFeatureListFromEnv()
-  if (!features.length) return getResolvedClaudeModelName()
-
-  const usesHaiku = features.includes(f)
-  const resolved = usesHaiku ? getResolvedClaudeHaikuModelName() : getResolvedClaudeModelName()
-  claudeLog.debug('claude.model.route', { feature: f, resolvedModel: resolved, usesHaiku })
+  const resolved = getResolvedClaudeHaikuModelName()
+  claudeLog.debug('claude.model.route', { feature: f || '(default)', resolvedModel: resolved })
   return resolved
 }
 
@@ -126,12 +98,30 @@ export function getRuntimeAnthropicApiKey() {
   return getRuntimeApiKey() || ''
 }
 
-function requireAnthropicKey(apiKeyOverride) {
-  const envKey = import.meta.env.VITE_ANTHROPIC_API_KEY
-  const apiKey = apiKeyOverride ?? getRuntimeApiKey() ?? envKey
+function trimEnv(value) {
+  if (value == null) return ''
+  return String(value).trim()
+}
+
+/**
+ * Picks the API key for a request. Order: explicit override → browser-stored runtime key →
+ * VITE_ANTHROPIC_HAIKU_API_KEY → VITE_ANTHROPIC_API_KEY (Haiku-only app; no Sonnet tier).
+ */
+function resolveAnthropicApiKey(apiKeyOverride, _resolvedModelName) {
+  if (apiKeyOverride != null && trimEnv(apiKeyOverride)) return trimEnv(apiKeyOverride)
+  const fromRuntime = trimEnv(getRuntimeApiKey())
+  if (fromRuntime) return fromRuntime
+
+  const fallback = trimEnv(import.meta.env.VITE_ANTHROPIC_API_KEY)
+  const haikuKey = trimEnv(import.meta.env.VITE_ANTHROPIC_HAIKU_API_KEY)
+  return haikuKey || fallback
+}
+
+function requireAnthropicKey(apiKeyOverride, resolvedModelName) {
+  const apiKey = resolveAnthropicApiKey(apiKeyOverride, resolvedModelName)
   if (!apiKey) {
     throw new Error(
-      'Missing VITE_ANTHROPIC_API_KEY. Set it in frontend/.env and restart the dev server (use VITE_LLM_PROVIDER=claude).'
+      'Anthropic API key is not configured. Add VITE_ANTHROPIC_API_KEY to frontend/.env (optional: VITE_ANTHROPIC_HAIKU_API_KEY), then restart the dev server.'
     )
   }
   return apiKey
@@ -149,14 +139,17 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function generateClaudeText(prompt, { apiKeyOverride, modelOverride } = {}) {
-  const client = new Anthropic({
-    apiKey: requireAnthropicKey(apiKeyOverride),
-    dangerouslyAllowBrowser: true,
-  })
-
+async function generateClaudeText(
+  prompt,
+  { apiKeyOverride, modelOverride, telemetryEndpoint, correlationId } = {}
+) {
   const modelName =
     typeof modelOverride === 'string' && modelOverride.trim() ? modelOverride.trim() : getResolvedClaudeModelName()
+
+  const client = new Anthropic({
+    apiKey: requireAnthropicKey(apiKeyOverride, modelName),
+    dangerouslyAllowBrowser: true,
+  })
 
   const maxAttempts = 3
   let lastErr = null
@@ -168,6 +161,12 @@ async function generateClaudeText(prompt, { apiKeyOverride, modelOverride } = {}
         messages: [{ role: 'user', content: prompt }],
       })
       const out = textFromMessage(msg)
+      if (telemetryEndpoint) {
+        recordAnthropicUsage(telemetryEndpoint, usageFromAnthropicMessage(msg), {
+          model: modelName,
+          correlationId,
+        })
+      }
       claudeLog.info('claude.tokens.estimate', {
         kind: 'text',
         model: modelName,
@@ -182,7 +181,7 @@ async function generateClaudeText(prompt, { apiKeyOverride, modelOverride } = {}
       const msg = err?.message ? err.message : String(err)
       if (/401|403|invalid|authentication|api[_ ]?key/i.test(msg)) {
         throw new Error(
-          'Anthropic API key is not usable. Set `VITE_ANTHROPIC_API_KEY` in frontend/.env or paste a key in the Dashboard testing panel.'
+          'Anthropic API key is not usable. Set VITE_ANTHROPIC_API_KEY (or VITE_ANTHROPIC_HAIKU_API_KEY) in frontend/.env.'
         )
       }
 
@@ -219,7 +218,7 @@ export async function generateRegenerativeAdvice({
   soilHealthScore,
 } = {}) {
   const t0 = performance.now()
-  const model = resolveClaudeModelForFeature('soilAdvice')
+  const model = getResolvedClaudeSoilAdviceModelName()
   claudeLog.info('claude.soilAdvice.start', { model }, { correlationId })
   const locationLine = formatCoords(location?.latitude, location?.longitude)
   const addressLine = typeof location?.address === 'string' && location.address.trim() ? location.address.trim() : 'unknown'
@@ -345,7 +344,11 @@ Return plain text (no markdown), with these sections:
 Keep it concise, friendly, and actionable. Avoid heavy jargon. Use simple farmer language.`
 
   try {
-    const text = await generateClaudeText(prompt, { modelOverride: model })
+    const text = await generateClaudeText(prompt, {
+      modelOverride: model,
+      telemetryEndpoint: ANTHROPIC_USAGE_KEYS.soilAdvice,
+      correlationId,
+    })
     claudeLog.info(
       'claude.soilAdvice.success',
       { model, textChars: typeof text === 'string' ? text.length : 0 },
@@ -406,10 +409,15 @@ Return ONLY strict JSON (no markdown, no commentary) with this schema:
 }
 
 Formatting rules:
-- "layeringSteps" should be 5 to 10 short steps, each a single string.`
+- "layeringSteps" should be 5 to 10 short steps, each a single string.
+- Base greenItems, brownItems, percentages, and every layering step on the actual inventory lines above; do not invent materials not listed unless you say "add" for a standard amendment (e.g. extra browns) and explain why.`
 
   try {
-    const text = await generateClaudeText(prompt, { modelOverride: model })
+    const text = await generateClaudeText(prompt, {
+      modelOverride: model,
+      telemetryEndpoint: ANTHROPIC_USAGE_KEYS.compostRecipe,
+      correlationId,
+    })
     const json = extractJson(text)
     if (json) {
       claudeLog.info(
@@ -488,10 +496,15 @@ Return ONLY strict JSON (no markdown, no commentary) with this schema:
 
 Notes:
 - Bullets should stay reusable (avoid one-day weather forecasts), but may reference seasonal patterns implied by climate hints.
-- Keep bullets concise and action-oriented.`
+- Keep bullets concise and action-oriented.
+- When farmer context JSON includes non-empty fields, summaries and bullets must visibly reflect those fields (soil type, crops, equipment limits, climate/location hints, recent organic vs chemical activity); if a field is missing or empty, do not pretend it was provided.`
 
   try {
-    const text = await generateClaudeText(prompt, { modelOverride: model })
+    const text = await generateClaudeText(prompt, {
+      modelOverride: model,
+      telemetryEndpoint: ANTHROPIC_USAGE_KEYS.knowledgeHub,
+      correlationId,
+    })
     const json = extractJson(text)
     if (json) {
       const categories = Array.isArray(json?.categories) ? json.categories : []
@@ -575,10 +588,11 @@ Formatting rules:
 
   const combined = { weatherSummary, next48hHourly }
   try {
-    const text = await generateClaudeText(
-      `${prompt}\n\n(For reference, JSON blob):\n${JSON.stringify(combined)}`,
-      { modelOverride: model }
-    )
+    const text = await generateClaudeText(`${prompt}\n\n(For reference, JSON blob):\n${JSON.stringify(combined)}`, {
+      modelOverride: model,
+      telemetryEndpoint: ANTHROPIC_USAGE_KEYS.smartAlert,
+      correlationId,
+    })
     const json = extractJson(text)
     if (json) {
       claudeLog.info(
@@ -631,7 +645,11 @@ Return ONLY strict JSON (no markdown, no commentary) with schema:
 Explanation should be 1 sentence, card-friendly, and suitable for a farmer (e.g., "Score is high due to recent rainfall and optimal temperature.").`
 
   try {
-    const text = await generateClaudeText(prompt, { modelOverride: model })
+    const text = await generateClaudeText(prompt, {
+      modelOverride: model,
+      telemetryEndpoint: ANTHROPIC_USAGE_KEYS.soilVitality,
+      correlationId,
+    })
     const json = extractJson(text)
     if (json) {
       claudeLog.info(
@@ -656,28 +674,6 @@ Explanation should be 1 sentence, card-friendly, and suitable for a farmer (e.g.
   }
 }
 
-// For the UI to verify a runtime-pasted key works.
-export async function testClaudeApiKey(apiKey, { correlationId } = {}) {
-  const t0 = performance.now()
-  claudeLog.info('claude.apiKeyTest.start', { keyLengthChars: apiKey ? String(apiKey).length : 0 }, { correlationId })
-  try {
-    const model = resolveClaudeModelForFeature('apiKeyTest')
-    const text = await generateClaudeText('Return exactly: OK', {
-      apiKeyOverride: apiKey,
-      modelOverride: model,
-    })
-    const out = String(text).trim()
-    claudeLog.info('claude.apiKeyTest.success', { responseChars: out.length }, { correlationId, durationMs: performance.now() - t0 })
-    return out
-  } catch (err) {
-    claudeLog.error('claude.apiKeyTest.error', normalizeErrorForLog(err), {
-      correlationId,
-      durationMs: performance.now() - t0,
-    })
-    throw err
-  }
-}
-
 // Task 8: AI Plant Scanner (Vision).
 export async function generatePlantScan({
   imageBase64,
@@ -688,7 +684,7 @@ export async function generatePlantScan({
 } = {}) {
   const t0 = performance.now()
   const imageByteLength = typeof imageBase64 === 'string' ? imageBase64.length : 0
-  const modelName = getResolvedClaudeModelName()
+  const modelName = resolveClaudeModelForFeature('plantScan')
   claudeLog.info(
     'claude.plantScan.start',
     {
@@ -732,7 +728,7 @@ Rules:
     mimeType && /^image\/(jpeg|png|gif|webp)$/i.test(mimeType) ? mimeType : 'image/jpeg'
 
   const client = new Anthropic({
-    apiKey: requireAnthropicKey(null),
+    apiKey: requireAnthropicKey(null, modelName),
     dangerouslyAllowBrowser: true,
   })
 
@@ -759,6 +755,11 @@ Rules:
           ],
         },
       ],
+    })
+
+    recordAnthropicUsage(ANTHROPIC_USAGE_KEYS.plantScan, usageFromAnthropicMessage(msg), {
+      model: modelName,
+      correlationId,
     })
 
     const text = textFromMessage(msg)
@@ -883,7 +884,11 @@ Rules:
 ${buildJsonTaskLanguageConstraint(lang)}`
 
   try {
-    const text = await generateClaudeText(prompt, { modelOverride: model })
+    const text = await generateClaudeText(prompt, {
+      modelOverride: model,
+      telemetryEndpoint: ANTHROPIC_USAGE_KEYS.dailyTasks,
+      correlationId,
+    })
     const json = extractJson(text)
     const tasks = Array.isArray(json?.tasks) ? json.tasks : []
     if (json) {
@@ -951,7 +956,11 @@ Rules:
 - Keep "cropSuitability" to 4-8 region-appropriate crop names.
 - "regionalSummary" should be 1 short sentence for farmers.`
   try {
-    const text = await generateClaudeText(prompt, { modelOverride: model })
+    const text = await generateClaudeText(prompt, {
+      modelOverride: model,
+      telemetryEndpoint: ANTHROPIC_USAGE_KEYS.locationIntel,
+      correlationId,
+    })
     const json = extractJson(text)
     if (json) return json
     return { parseError: true, rawText: text }
@@ -1022,7 +1031,11 @@ Output constraints:
 - Keep values concise and practical for a farmer.`
 
   try {
-    const text = await generateClaudeText(prompt, { modelOverride: model })
+    const text = await generateClaudeText(prompt, {
+      modelOverride: model,
+      telemetryEndpoint: ANTHROPIC_USAGE_KEYS.farmDailyInsight,
+      correlationId,
+    })
     const json = extractJson(text)
     if (json) return json
     return { parseError: true, rawText: text }

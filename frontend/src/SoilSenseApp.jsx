@@ -4,15 +4,14 @@ import { BadgeCheck, BookOpen, Leaf, TreePine, Camera, Sun, Droplet, Map, Loader
 import {
   generateKnowledgeHub,
   generateFarmDailyInsight,
+  generateRegenerativeAdvice,
   generateSoilVitalityScore,
   buildSoilVitalityScoreFallback,
   generateDailyTasks,
   generateLocationEnvironmentalAnalysis,
-  clearRuntimeGeminiApiKey,
-  getRuntimeGeminiApiKey,
-  setRuntimeGeminiApiKey,
-  testGeminiApiKey,
-} from './lib/gemini'
+  formatLlmConfigErrorForUi,
+} from './lib/ai'
+import { extractJson } from './lib/llmJson.js'
 import CompostWizard from './components/CompostWizard'
 import CompostGuide from './components/CompostGuide'
 import SoilVitalityScore from './components/SoilVitalityScore'
@@ -53,7 +52,9 @@ const appLog = createLogger('app')
 
 function coordsKey(c) {
   // Small rounding so repeated measurements don't re-trigger AI calls constantly.
-  return `${Number(c.latitude).toFixed(3)},${Number(c.longitude).toFixed(3)}`
+  if (!c || typeof c.latitude !== 'number' || typeof c.longitude !== 'number') return 'invalid'
+  if (!Number.isFinite(c.latitude) || !Number.isFinite(c.longitude)) return 'invalid'
+  return `${c.latitude.toFixed(3)},${c.longitude.toFixed(3)}`
 }
 
 function toFixedOrDash(n, digits) {
@@ -705,7 +706,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
   /** Cache key for Knowledge Hub (lang + profile + activity + location + weather); `null` after error allows retry. */
   const hubLoadedCacheKeyRef = useRef(null)
 
-  // Soil advice card (Gemini).
+  // Soil advice card (Claude).
   const [aiStatus, setAiStatus] = useState('idle') // idle|loading|success|error
   const [aiAdvice, setAiAdvice] = useState('')
   const [aiError, setAiError] = useState('')
@@ -1605,33 +1606,6 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
   const autoLocationRequestedRef = useRef(false)
   const locationRequestInFlightRef = useRef(false)
 
-  // Gemini runtime API key fallback (manual testing).
-  const [keyPromptOpen, setKeyPromptOpen] = useState(false)
-  const [keyDraft, setKeyDraft] = useState('')
-  const [keyStatus, setKeyStatus] = useState('idle') // idle|testing|saved|error
-  const [keyStatusError, setKeyStatusError] = useState('')
-  const [usesRuntimeKey, setUsesRuntimeKey] = useState(() => Boolean(getRuntimeGeminiApiKey()))
-
-  const isGeminiKeyBlocked = useMemo(() => {
-    const combined = `${aiError || ''}\n${smartError || ''}`.toLowerCase()
-    return (
-      combined.includes('blocked') ||
-      combined.includes('leaked') ||
-      combined.includes('forbidden') ||
-      combined.includes('403') ||
-      combined.includes('expired') ||
-      combined.includes('invalid')
-    )
-  }, [aiError, smartError])
-
-  useEffect(() => {
-    if (isGeminiKeyBlocked) {
-      setKeyPromptOpen(true)
-      setKeyStatus('idle')
-      setKeyStatusError('')
-    }
-  }, [isGeminiKeyBlocked])
-
   const locationLine = useMemo(() => {
     if (geoStatus === 'loading') return t('common.loading')
     if (geoStatus === 'error')
@@ -1780,41 +1754,6 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     }
   }, [t])
 
-  async function onTestAndSaveKey() {
-    const cleaned = keyDraft.trim()
-    if (!cleaned) {
-      setKeyStatus('error')
-      setKeyStatusError(t('keyPanel.pleasePasteKeyFirst'))
-      return
-    }
-
-    setKeyStatus('testing')
-    setKeyStatusError('')
-
-    try {
-      await testGeminiApiKey(cleaned, { correlationId: generateRunId() })
-      setRuntimeGeminiApiKey(cleaned)
-      setUsesRuntimeKey(true)
-      setKeyStatus('saved')
-      setKeyPromptOpen(false)
-
-      // Force rerun once key is updated.
-      lastAdviceCoordsKeyRef.current = ''
-      lastAlertCoordsKeyRef.current = ''
-      if (coords && geoStatus === 'success') {
-        void (async () => {
-          const signals = await runSmartAlert()
-          await runAdvice({ weatherSignalsOverride: signals })
-        })()
-      }
-
-      setTimeout(() => setKeyStatus('idle'), 2000)
-    } catch (err) {
-      setKeyStatus('error')
-      setKeyStatusError(err?.message ? err.message : String(err))
-    }
-  }
-
   useEffect(() => {
     if (autoLocationRequestedRef.current) return
     autoLocationRequestedRef.current = true
@@ -1859,11 +1798,52 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     setAiAdvice('')
     setAiError('')
 
-    try {
-      // Reuse existing weather signals if they are fresh; otherwise fetch.
-      let weatherSignals =
-        weatherSignalsOverride && typeof weatherSignalsOverride === 'object' ? weatherSignalsOverride : null
+    const locationContext = resolveFarmLocationContext({ profile, coords })
+    let weatherSignals =
+      weatherSignalsOverride && typeof weatherSignalsOverride === 'object' ? weatherSignalsOverride : null
+    let climateZoneHint = 'unknown'
+    let envIntel = null
 
+    const applyRegenerativeAdviceFromSystem = async () => {
+      const cz = envIntel?.climateZone || climateZoneHint || 'unknown'
+      const addressLine =
+        typeof profile?.address === 'string' && profile.address.trim()
+          ? profile.address.trim()
+          : locationContext.address || ''
+      const text = await generateRegenerativeAdvice({
+        location: {
+          latitude: locationContext.latitude,
+          longitude: locationContext.longitude,
+          address: addressLine,
+          climateZone: cz,
+        },
+        weatherSignals: weatherSignals || {},
+        lang,
+        correlationId,
+        profile,
+        activityImpact: activityImpact || {},
+        soilHealthScore: Number.isFinite(vitalityScore) ? vitalityScore : null,
+      })
+      const out = typeof text === 'string' ? text.trim() : String(text || '').trim()
+      if (!out) throw new Error('Empty advice response.')
+      return out
+    }
+
+    try {
+      if (!locationContext.isClear) {
+        setAiAdvice(
+          [
+            'Location is unclear. Please provide your farm address or enable location access.',
+            '',
+            '- Enter your farm address in the profile to use it as the primary farm location.',
+            '- If no address is available, enable device location so local weather can be fetched.',
+          ].join('\n')
+        )
+        setAiStatus('success')
+        return
+      }
+
+      // Reuse existing weather signals if they are fresh; otherwise fetch.
       if (!weatherSignals) {
         const now = Date.now()
         const canReuse =
@@ -1882,8 +1862,8 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         }
       }
 
-      const climateZoneHint = deriveClimateZoneHintFromWeatherSignals(weatherSignals || {})
-      const envIntel = await generateLocationEnvironmentalAnalysis({
+      climateZoneHint = deriveClimateZoneHintFromWeatherSignals(weatherSignals || {})
+      envIntel = await generateLocationEnvironmentalAnalysis({
         address: profile?.address || '',
         latitude: hasCoords ? coords.latitude : null,
         longitude: hasCoords ? coords.longitude : null,
@@ -1892,20 +1872,6 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         correlationId,
       }).catch(() => null)
       if (envIntel && !envIntel?.parseError) setLocationIntel(envIntel)
-
-      const locationContext = resolveFarmLocationContext({ profile, coords })
-      if (!locationContext.isClear) {
-        setAiAdvice(
-          [
-            'Location is unclear. Please provide your farm address or enable location access.',
-            '',
-            '- Enter your farm address in the profile to use it as the primary farm location.',
-            '- If no address is available, enable device location so local weather can be fetched.',
-          ].join('\n')
-        )
-        setAiStatus('success')
-        return
-      }
 
       const memoryBefore = loadFarmMemory(locationContext.farmKey)
       const todayEntry = {
@@ -1920,7 +1886,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
       }
       const memoryAfter = appendFarmMemoryEntry(locationContext.farmKey, locationContext, todayEntry)
 
-      const insight = await generateFarmDailyInsight({
+      let insight = await generateFarmDailyInsight({
         locationContext: {
           ...locationContext,
           climateZone: envIntel?.climateZone || climateZoneHint || 'unknown',
@@ -1940,6 +1906,26 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         lang,
         correlationId,
       })
+
+      if (insight?.parseError && typeof insight?.rawText === 'string' && insight.rawText.trim()) {
+        const repaired = extractJson(insight.rawText)
+        if (repaired && typeof repaired === 'object' && !repaired.parseError) {
+          insight = repaired
+        }
+      }
+
+      const hasUsableInsight =
+        insight &&
+        !insight.parseError &&
+        ((typeof insight.daily_summary === 'string' && insight.daily_summary.trim()) ||
+          (Array.isArray(insight.recommendations) && insight.recommendations.some((x) => typeof x === 'string' && x.trim())))
+
+      if (!hasUsableInsight) {
+        const prose = await applyRegenerativeAdviceFromSystem()
+        setAiAdvice(prose)
+        setAiStatus('success')
+        return
+      }
 
       const detectedChangesFallback = buildDetectedChangesFromMemory(memoryAfter || memoryBefore)
       const normalized = {
@@ -1981,8 +1967,28 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
       setAiAdvice(cleanAdvice)
       setAiStatus('success')
     } catch (err) {
+      if (locationContext.isClear) {
+        try {
+          const prose = await applyRegenerativeAdviceFromSystem()
+          setAiAdvice(prose)
+          setAiStatus('success')
+          setAiError('')
+          uiLog.info(
+            'ui.soilAdvice.regenerativeFallback',
+            { reason: err?.message ? String(err.message).slice(0, 120) : 'unknown' },
+            { correlationId }
+          )
+          return
+        } catch (fallbackErr) {
+          uiLog.warn(
+            'ui.soilAdvice.regenerativeFallback.failed',
+            { primary: normalizeErrorForLog(err), fallback: normalizeErrorForLog(fallbackErr) },
+            { correlationId }
+          )
+        }
+      }
       setAiStatus('error')
-      setAiError(err?.message ? err.message : String(err))
+      setAiError(formatLlmConfigErrorForUi(err))
     }
   }
 
@@ -2044,7 +2050,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
           weatherHumidityBucket: signals?.humidityBucket || 'unknown',
           sunBucket: signals?.sunBucket || 'unknown',
           activityImpactDelta: Math.round(activityImpact?.soilHealthDelta || 0),
-          usedGeminiFallback: vitalityResolved.usedFallback,
+          usedVitalityFallback: vitalityResolved.usedFallback,
         },
         { correlationId }
       )
@@ -2136,7 +2142,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
       }
     } catch (err) {
       signalsForReturn = {}
-      // Weather/Gemini failed: still keep UI stable and show deterministic advice from whatever we can.
+      // Weather/AI failed: still keep UI stable and show deterministic advice from whatever we can.
       setSmartWeatherSignals({})
       lastSmartWeatherFingerprintRef.current = weatherSignalsFingerprint({})
       smartWeatherLastFetchAtRef.current = Date.now()
@@ -2149,7 +2155,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
       setVitalityBaseExplanation(scoreFallback.explanation)
       setVitalityStatus('success')
 
-      setVitalityError(err?.message ? err.message : String(err))
+      setVitalityError(formatLlmConfigErrorForUi(err))
 
       if (dailyTasks.length === 0 && !dailyTasksGenerationInFlightRef.current) {
         const hasCropSelection = hasUserGrowSelections(profile)
@@ -2302,26 +2308,12 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     }
   }
 
-  function onUseEnvGeminiKey() {
-    clearRuntimeGeminiApiKey()
-    setUsesRuntimeKey(false)
-    setKeyDraft('')
-    setKeyStatus('idle')
-    setKeyStatusError('')
-    lastAdviceCoordsKeyRef.current = ''
-    lastAlertCoordsKeyRef.current = ''
-    if (coords && geoStatus === 'success') {
-      void (async () => {
-        const signals = await runSmartAlert()
-        await runAdvice({ weatherSignalsOverride: signals })
-      })()
-    }
-  }
-
-  // Fetch soil advice + smart alert when coords successfully update (sequential to reduce Gemini burst / rate limits).
+  // Fetch soil advice + smart alert when coords successfully update (sequential to reduce API burst / rate limits).
   useEffect(() => {
     if (geoStatus !== 'success') return
     if (!coords) return
+    if (typeof coords.latitude !== 'number' || typeof coords.longitude !== 'number') return
+    if (!Number.isFinite(coords.latitude) || !Number.isFinite(coords.longitude)) return
 
     const key = coordsKey(coords)
     if (key === lastAdviceCoordsKeyRef.current && key === lastAlertCoordsKeyRef.current) return
@@ -2346,7 +2338,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.address, geoStatus])
 
-  // If the user changes language, re-run Smart Alert so Gemini responses update immediately.
+  // If the user changes language, re-run Smart Alert so AI responses update immediately.
   // (Daily tasks refresh is also queued in a separate lang effect so it still runs when the user
   // was not on the dashboard when switching language.)
   useEffect(() => {
@@ -2478,7 +2470,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
         if (cancelled) return
         hubLoadedCacheKeyRef.current = null
         setHubStatus('error')
-        setHubError(err?.message ? err.message : String(err))
+        setHubError(formatLlmConfigErrorForUi(err))
       }
     })()
     return () => {
@@ -2565,19 +2557,6 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
                   </p>
                 ) : null}
               </header>
-
-              {usesRuntimeKey ? (
-                <section className="card runtime-key-banner" aria-label={t('keyPanel.usingStoredKey')}>
-                  <div className="card-body runtime-key-banner-inner">
-                    <p className="muted" style={{ margin: 0 }}>
-                      {t('keyPanel.usingStoredKey')}
-                    </p>
-                    <button type="button" className="btn btn-ghost btn-inline" onClick={onUseEnvGeminiKey}>
-                      {t('keyPanel.useEnvKey')}
-                    </button>
-                  </div>
-                </section>
-              ) : null}
 
               <section className="command-center">
                 <SoilVitalityScore
@@ -3072,7 +3051,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
                       {t('common.soilAdviceEmpatheticReminder')}
                     </p>
                     <p className="muted">{t('common.couldNotGenerateAdvice')}</p>
-                    <pre className="error-pre">{aiError}</pre>
+                    {aiError?.trim() ? <pre className="error-pre">{aiError}</pre> : null}
                     <button
                       className="btn btn-primary"
                       onClick={() => {
@@ -3099,60 +3078,6 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
                   </div>
                 ) : null}
               </section>
-
-              {keyPromptOpen ? (
-                <section className="card gemini-key-card">
-                  <div className="card-body">
-                    <p className="muted gemini-key-label">{t('keyPanel.title')}</p>
-                    <p className="muted" style={{ marginTop: 6 }}>
-                      {t('keyPanel.subtitle')}
-                    </p>
-
-                    <label className="field" style={{ marginTop: 12 }}>
-                      <span className="field-label">{t('keyPanel.apiKey')}</span>
-                      <input
-                        value={keyDraft}
-                        onChange={(e) => setKeyDraft(e.target.value)}
-                        placeholder={t('keyPanel.pasteApiKeyValue')}
-                        className="field-input"
-                      />
-                    </label>
-
-                    {keyStatus === 'error' && keyStatusError ? (
-                      <pre className="error-pre" style={{ marginTop: 10 }}>
-                        {keyStatusError}
-                      </pre>
-                    ) : null}
-
-                    <div className="key-actions">
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        onClick={onTestAndSaveKey}
-                        disabled={keyStatus === 'testing'}
-                      >
-                        {keyStatus === 'testing'
-                          ? t('keyPanel.testing')
-                          : keyStatus === 'saved'
-                            ? t('keyPanel.saved')
-                            : t('keyPanel.saveAndRetry')}
-                      </button>
-                      {usesRuntimeKey ? (
-                        <button type="button" className="btn btn-ghost" onClick={onUseEnvGeminiKey}>
-                          {t('keyPanel.useEnvKey')}
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        onClick={() => setKeyPromptOpen(false)}
-                      >
-                        {t('keyPanel.notNow')}
-                      </button>
-                    </div>
-                  </div>
-                </section>
-              ) : null}
             </section>
           ) : null}
 
@@ -3248,7 +3173,7 @@ export default function SoilSenseApp({ hideWelcomeHeader = false, onActiveTabCha
                   {hubStatus === 'error' ? (
                     <div>
                       <p className="muted">{t('guide.couldNotLoadKnowledgeHub')}</p>
-                      <pre className="error-pre">{hubError}</pre>
+                      {hubError?.trim() ? <pre className="error-pre">{hubError}</pre> : null}
                     </div>
                   ) : null}
 
