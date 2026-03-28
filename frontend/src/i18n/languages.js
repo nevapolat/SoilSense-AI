@@ -11,7 +11,7 @@ export function getLanguageNativeLabel(id) {
 }
 
 export function getLanguageDisplayName(id) {
-  // Gemini prompt-friendly language names.
+  // LLM prompt-friendly language names.
   const m = {
     en: 'English',
     tr: 'Turkish',
