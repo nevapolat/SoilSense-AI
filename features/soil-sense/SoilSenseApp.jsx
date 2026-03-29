@@ -1,4 +1,4 @@
-import './App.css'
+import '../../frontend/src/App.css'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { BadgeCheck, BookOpen, Leaf, TreePine, Camera, Sun, Droplet, Map, Loader2 } from 'lucide-react'
 import {

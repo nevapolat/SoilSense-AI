@@ -1,30 +1,32 @@
- SoilSense AI: Regenerative Agriculture & Smart Waste Management System
- Problem Statement
-Globally, 40% of agricultural soils are degraded due to excessive chemical use and improper irrigation. Small to mid-sized farmers are abandoning production due to skyrocketing fertilizer costs and climate uncertainty. This threatens global food security and accelerates ecological collapse.
+# SoilSense AI: Regenerative Agriculture & Smart Waste Management System
 
- Target Audience
-Subsistence Farmers: Producers seeking to drastically reduce input costs (fertilizer, water).
+## Problem definition
 
-Local Governments & Communities: Groups managing collective composting and sustainable farming projects.
+Globally, a large share of agricultural soils are degraded due to excessive chemical use and improper irrigation. Small to mid-sized farmers face rising fertilizer costs and climate uncertainty, which threatens food security and accelerates ecological stress.
 
-Conscious Growers: Next-gen agritech entrepreneurs aiming to rehabilitate soil health.
+## User persona (target audience)
 
- AI’s Role (Claude Integration)
-Regenerative Prescriptions: Analyzes soil pH, moisture, and location data to offer biological (restorative) solutions instead of chemicals.
+- **Subsistence and smallholder farmers:** Need to cut input costs (fertilizer, water) while keeping yields viable.
+- **Local governments & communities:** Running collective composting or sustainable land-use programs.
+- **Conscious growers / agritech-minded producers:** Want practical, regenerative guidance without expensive hardware.
 
-Circular Fertilizer Economy: Processes regional waste data to optimize "Zero-Cost Fertilizer" (compost/liquid bio-fertilizer) formulas.
+## Role of AI in the project
 
-Climate Adaptation Intelligence: Utilizes micro-climate data to provide farmers with low-risk windows for planting and harvesting.
+SoilSense uses a **large language model (Anthropic Claude via API)** to turn farmer inputs—soil type, location, activities, optional images, and weather context—into **actionable, localized guidance**:
 
- Competitor Analysis & Our Edge
-Competitors: Corporate agritech software (Expensive and focused only on industrial big data).
+- Regenerative and soil-health recommendations (alternatives to over-reliance on chemicals).
+- Compost and organic-input suggestions aligned with available materials.
+- Daily tasks, alerts, and short explanations adapted to the user’s language (i18n).
 
-Our Edge: We "democratize" agriculture. Instead of expensive sensors, we use AI intelligence to provide "regenerative farming" guidance to even the smallest producers. We transform waste from a problem into a resource.
+The app combines **structured logic** (validation, Open-Meteo signals, field planning helpers) with **Claude-generated text and JSON-shaped outputs** so recommendations stay readable and implementable on the farm.
 
- Success Criteria (MVP)
-Generation of location-based "Soil Restoration Guides."
+## Competitor analysis & our edge
 
-Professional N-P-K balanced composting algorithms based on waste types.
+- **Competitors:** Corporate agritech tools that are costly and often optimized for industrial-scale data, not the smallest producers.
+- **Our edge:** Democratized access—practical regenerative guidance without mandatory sensors, using AI plus simple profile and location data.
 
-Early warning and climate adaptation module for extreme weather events.
+## Success criteria (MVP)
 
+- Location-aware soil restoration / guidance content.
+- Compost-oriented recommendations grounded in user inventory and context.
+- Climate- and season-aware hints for planting, tasks, and risk awareness.

@@ -1,6 +1,35 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const require = createRequire(import.meta.url)
+const frontendNodeModules = path.resolve(__dirname, 'node_modules')
+
+/**
+ * Kaynak `features/soil-sense/` altında olduğunda bare import'lar (react, lucide-react, …)
+ * yukarı çıkan `node_modules` yerine `frontend/node_modules` üzerinden çözülsün (Linux/Netlify uyumlu).
+ */
+function resolveSoilSenseDepsFromFrontend() {
+  return {
+    name: 'soilsense-resolve-from-frontend-nm',
+    enforce: 'pre',
+    resolveId(id, importer) {
+      if (!importer) return null
+      if (!importer.replace(/\\/g, '/').includes('/features/soil-sense/')) return null
+      if (id.startsWith('\0')) return null
+      if (id.startsWith('.') || path.isAbsolute(id)) return null
+      try {
+        return require.resolve(id, { paths: [frontendNodeModules] })
+      } catch {
+        return null
+      }
+    },
+  }
+}
 
 /** Forwards structured client logs to the dev server terminal (see VITE_LOG_TO_TERMINAL in logger). */
 function devClientLogToTerminalPlugin() {
@@ -43,5 +72,10 @@ function devClientLogToTerminalPlugin() {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss(), devClientLogToTerminalPlugin()],
+  plugins: [resolveSoilSenseDepsFromFrontend(), react(), tailwindcss(), devClientLogToTerminalPlugin()],
+  server: {
+    fs: {
+      allow: [path.resolve(__dirname, '..')],
+    },
+  },
 })

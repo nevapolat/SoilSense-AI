@@ -7,7 +7,7 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 export default defineConfig([
   globalIgnores(['dist']),
   {
-    files: ['**/*.{js,jsx}'],
+    files: ['**/*.{js,jsx}', '../features/soil-sense/**/*.{js,jsx}'],
     extends: [
       js.configs.recommended,
       reactHooks.configs.flat.recommended,
@@ -27,8 +27,8 @@ export default defineConfig([
     },
   },
   {
-    // Vite entry: multiple local components (AuthScreen, AppRoot, etc.) are intentional.
-    files: ['src/main.jsx'],
+    // App shell: multiple local components (AuthScreen, AppRoot, etc.) are intentional.
+    files: ['../features/soil-sense/main.jsx'],
     rules: {
       'react-refresh/only-export-components': 'off',
     },
