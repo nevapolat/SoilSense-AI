@@ -7,7 +7,7 @@
 - Kullanici temel tarim verilerini girer (konum, toprak bilgisi, nem, vb.).
 
 ## 3) AI Analizi
-- Gemini destekli analiz motoru girdileri degerlendirir.
+- Claude destekli analiz motoru girdileri degerlendirir.
 - Toprak iyilestirme, kompost ve uretim odakli oneriler olusturulur.
 
 ## 4) Oneri Sunumu
