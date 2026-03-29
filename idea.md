@@ -9,7 +9,7 @@ Local Governments & Communities: Groups managing collective composting and susta
 
 Conscious Growers: Next-gen agritech entrepreneurs aiming to rehabilitate soil health.
 
- AI’s Role (Gemini Integration)
+ AI’s Role (Claude Integration)
 Regenerative Prescriptions: Analyzes soil pH, moisture, and location data to offer biological (restorative) solutions instead of chemicals.
 
 Circular Fertilizer Economy: Processes regional waste data to optimize "Zero-Cost Fertilizer" (compost/liquid bio-fertilizer) formulas.
