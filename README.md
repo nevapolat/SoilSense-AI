@@ -46,7 +46,7 @@ Ayrıntılı gerekçeler için kök dizindeki `tech-stack.md` dosyasına bakın.
 | Yayın linki (ayrı dosya) | `yayin-linki.md` |
 | Demo video notu | `demo-videosu.md` (link bu README’de de var) |
 | Bonus: otomasyon | `agents/` (`preflight.mjs`) |
-| Bonus: görseller | `assets/` (SVG ikonlar + `README.md`) |
+| Bonus: görseller | `assets/` (SVG, `screenshots/`, `reference/`; `README.md`) |
 
 ## Proje dosya yapısı (özet)
 
@@ -54,4 +54,4 @@ Ayrıntılı gerekçeler için kök dizindeki `tech-stack.md` dosyasına bakın.
 - `features/` — uygulama kaynağı (`features/soil-sense/`)
 - `frontend/` — Vite projesi, `npm run dev` / `build`
 - **`agents/` (bonus):** `preflight.mjs` — repo kökünden `node agents/preflight.mjs` ile `frontend` production build doğrulaması; ayrıntı `agents/README.md`.
-- **`assets/` (bonus):** PWA/favicon SVG ikonları + `assets/README.md` (canlı demo ve demo video linkleri).
+- **`assets/` (bonus):** PWA SVG ikonları, `screenshots/` (uygulama ekran görüntüleri), `reference/` (kompost / sürdürülebilirlik referans görselleri); ayrıntı `assets/README.md`.
